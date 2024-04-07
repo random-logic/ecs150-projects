@@ -9,26 +9,26 @@ using namespace std;
 // g++ -o wcat wcat.cpp -Wall -Werror
 // For this project, you are required to use the following routines to do file input and output: open, read, write, and close.
 int main(int argc, char* argv[]) { 
-    int errStatus = 0;
-
     for (int i = 1; i < argc; ++i) {
         const char* fileName = argv[i];
         int fileDescriptor = open(fileName, O_RDONLY);
 
-        if (fileDescriptor == -1) {
-            errStatus = 1;
-            cout << "wcat: cannot open file";
+        if (fileDescriptor < 0) {
+            cout << "wcat: cannot open file" << endl;
+            return 1;
         }
         else {
-            int bufferSize = 4096;
-            char buffer[bufferSize];
-            while (read(fileDescriptor, buffer, bufferSize) > 0) {
+            int bufferSize = 8192;
+            char buffer[bufferSize + 1];
+            int bytesRead;
+            while ((bytesRead = read(fileDescriptor, buffer, bufferSize)) > 0) {
+                buffer[bytesRead] = '\0'; // ensure null termination
                 cout << buffer;
             }
         }
 
-        cout << endl;
+        close(fileDescriptor);
     }
 
-    return errStatus;
+    return 0;
 }
