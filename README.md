@@ -1,7 +1,7 @@
 # Setup
 1. clone this repo and cd to the root of this repo
 2. docker pull randomlogic01/ecs150
-3. docker run -v $(pwd):/ECS_150 -it randomlogic01/ecs150
+3. docker run -p 3000:3000 -v $(pwd):/ECS_150 -it randomlogic01/ecs150
 
 # ECS 150 programming projects
 
