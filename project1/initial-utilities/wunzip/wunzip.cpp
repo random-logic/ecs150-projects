@@ -39,4 +39,6 @@ int main(int argc, char* argv[]) {
 
         unzipFile(fileDescriptor);
     }
+
+    return 0;
 }
