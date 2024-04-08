@@ -18,11 +18,10 @@ int main(int argc, char* argv[]) {
         }
         else {
             int bufferSize = 8192;
-            char buffer[bufferSize + 1];
+            char buffer[bufferSize];
             int bytesRead;
             while ((bytesRead = read(fileDescriptor, buffer, bufferSize)) > 0) {
-                buffer[bytesRead] = '\0'; // ensure null termination
-                cout << buffer;
+                write(STDOUT_FILENO, &buffer, sizeof(char) * bytesRead);
             }
         }
 
