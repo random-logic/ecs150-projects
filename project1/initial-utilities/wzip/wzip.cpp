@@ -31,6 +31,7 @@ int main(int argc, char* argv[]) {
 
         if (fileDescriptor < 0) {
             cout << "wzip: cannot open file" << endl;
+            close(fileDescriptor);
             return 1;
         }
 
@@ -46,6 +47,8 @@ int main(int argc, char* argv[]) {
                 currChar = letter;
             }
         }
+
+        close(fileDescriptor);
     }
 
     output(currChar, count);
