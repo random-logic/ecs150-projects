@@ -1,5 +1,4 @@
 #include <iostream>
-#include <string>
 
 #include <fcntl.h> // for open
 #include <unistd.h> // for write, read, close
