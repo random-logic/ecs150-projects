@@ -15,7 +15,8 @@ void unzipFile(int fileDescriptor) {
         int count = *((int32_t*) buffer);
         char letter = buffer[LETTER_POS];
         for (int i = 0; i < count; ++i) {
-            cout << letter;
+            // cout << letter;
+            write(STDOUT_FILENO, (void*) &letter, sizeof(char));
         }
     }
 }
@@ -34,10 +35,12 @@ int main(int argc, char* argv[]) {
 
         if (fileDescriptor < 0) {
             cout << "wunzip: cannot open file" << endl;
+            close(fileDescriptor);
             return 1;
         }
 
         unzipFile(fileDescriptor);
+        close(fileDescriptor);
     }
 
     return 0;
