@@ -1,4 +1,5 @@
 #include <string>
+#include <cstring>
 #include <iostream>
 #include <vector>
 
@@ -11,7 +12,13 @@ void searchLine(string & line, string & searchTerm) {
     size_t pos = line.find(searchTerm);
 
     if (pos != string::npos) {
-        cout << line << endl;
+        // cout << line << endl;
+        line.push_back('\n');
+
+        char buffer[line.size() + 1];
+        strcpy(buffer, line.c_str());
+
+        write(STDOUT_FILENO, buffer, sizeof(char) * line.size());
     }
 }
 
@@ -24,10 +31,17 @@ void searchLine(vector<char> & line, string & searchTerm) {
 }
 
 void searchInput(string & searchTerm) {
-    string line;
+    vector<char> line;
+
+    char buffer;
     
-    while (getline(cin, line)) {
-        searchLine(line, searchTerm);
+    while (read(STDIN_FILENO, &buffer, sizeof(char)) > 0) {
+        if (buffer == '\n') {
+            searchLine(line, searchTerm);
+        }
+        else {
+            line.push_back(buffer);
+        }
     }
 }
 
@@ -78,10 +92,12 @@ int main(int argc, char* argv[]) {
 
             if (fileDescriptor < 0) {
                 cout << "wgrep: cannot open file" << endl;
+                close(fileDescriptor);
                 return 1;
             }
             else {
                 searchFile(fileDescriptor, searchTerm);
+                close(fileDescriptor);
             }
         }
     }
