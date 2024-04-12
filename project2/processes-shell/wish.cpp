@@ -3,10 +3,33 @@
 #include <fstream> // for ifstream
 #include <sstream> // for istringstream
 #include <unistd.h> // for getpid()
+#include <sys/wait.h> // for wait()
 #include <memory> // for unique_ptr
 #include <vector>
+#include <cstring>
 
 using namespace std;
+
+char** vectorOfStringToCharArray(const std::vector<std::string>& vec) {
+    // Allocate memory for the array of char pointers
+    char** charArray = new char*[vec.size()];
+
+    // Populate the array with dynamically allocated char arrays
+    for (size_t i = 0; i < vec.size(); ++i) {
+        charArray[i] = new char[vec[i].size() + 1]; // +1 for null terminator
+        strcpy(charArray[i], vec[i].c_str());
+    }
+
+    return charArray;
+}
+
+// Function to deallocate memory allocated for char**
+void deallocateCharArray(char** charArray, size_t size) {
+    for (size_t i = 0; i < size; ++i) {
+        delete[] charArray[i];
+    }
+    delete[] charArray;
+}
 
 string trim(const string& str) {
     size_t start = 0;
@@ -65,11 +88,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    vector<string> searchPaths;
+    vector<string> searchPaths = { "/bin" };
     
     while (true) {
-        cout << "wish> ";
-
         string line;
         getline(*in, line);
 
@@ -83,11 +104,11 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
-            vector<string>::size_type count = args.size();
+            int count = args.size();
             string cmd = args[0];
 
             if (cmd == "exit") {
-                break;
+                return 0;
             }
             else if (cmd == "cd") {
                 if (count != 2 || chdir(args[1].c_str())) {
@@ -96,12 +117,37 @@ int main(int argc, char* argv[]) {
             }
             else if (cmd == "path") {
                 searchPaths.clear();
-                for (int i = 1; i < count; ++i) {
-                    searchPaths.push_back(args[i]);
-                }
+                searchPaths = vector<string>(args.begin() + 1, args.end());
             }
             else {
-                // ??
+                int ret = fork();
+
+                if (ret == 0) {
+                    // This is the child process
+                    for (string path : searchPaths) {
+                        // Check if program exists in path
+                        if (access(path.c_str(), X_OK)) {
+                            // Cannot access file
+                            continue;
+                        }
+
+                        char** args_exec = vectorOfStringToCharArray(args);
+
+                        execv(path.c_str(), args_exec);
+
+                        // If we reach here, an error occured
+                        // ?? TODO: reroute err of terminal command using pipes or dup2?
+                        // Asked this question on piazza
+                        // Potential fix: https://stackoverflow.com/questions/7292642/grabbing-output-from-exec
+
+                        deallocateCharArray(args_exec, count);
+                        return 0;
+                    }
+                }
+                else {
+                    // This is the parent process
+                    wait(NULL);
+                }
             }
         }
     }
