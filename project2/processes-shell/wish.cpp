@@ -136,8 +136,9 @@ int main(int argc, char* argv[]) {
                         execv(path.c_str(), args_exec);
 
                         // If we reach here, an error occured
-                        // Print out the err based on errno
-                        cerr << strerror(errno) << endl;
+                        // ?? TODO: reroute err of terminal command using pipes or dup2?
+                        // Asked this question on piazza
+                        // Potential fix: https://stackoverflow.com/questions/7292642/grabbing-output-from-exec
 
                         deallocateCharArray(args_exec, count);
                         return 0;
