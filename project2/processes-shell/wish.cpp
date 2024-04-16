@@ -71,6 +71,7 @@ void printErr() {
 // g++ -o wish wish.cpp -Wall -Werror
 int main(int argc, char* argv[]) {
     unique_ptr<istream> in;
+    bool readFromFile = false;
     
     if (argc == 1) {
         // Use cin
@@ -78,6 +79,7 @@ int main(int argc, char* argv[]) {
     }
     else if (argc == 2) {
         // Use fin
+        readFromFile = true;
         in = make_unique<ifstream>(argv[1]);
 
         if (!(*in)) {
@@ -94,7 +96,10 @@ int main(int argc, char* argv[]) {
     
     while (true) {
         string line;
-        getline(*in, line);
+        
+        if (!getline(*in, line) && readFromFile) {
+            return 0;
+        }
 
         istringstream iss(line);
         vector<string> inputs = split(line, '&');
@@ -110,7 +115,12 @@ int main(int argc, char* argv[]) {
             string cmd = args[0];
 
             if (cmd == "exit") {
-                return 0;
+                if (count == 1) {
+                    return 0;
+                }
+                else {
+                    printErr();
+                }
             }
             else if (cmd == "cd") {
                 if (count != 2 || chdir(args[1].c_str())) {
@@ -128,22 +138,25 @@ int main(int argc, char* argv[]) {
                     // This is the child process
                     for (string path : searchPaths) {
                         // Check if program exists in path
-                        if (access(path.c_str(), X_OK)) {
+                        if (access((path + "/" + cmd).c_str(), X_OK)) {
                             // Cannot access file
                             continue;
                         }
 
                         char** args_exec = vectorOfStringToCharArray(args);
 
-                        execv(path.c_str(), args_exec);
+                        execv((path + "/" + cmd).c_str(), args_exec);
 
+                        // execv returned -1, which is an error
                         printErr();
-
-                        cout << strerror(errno) << endl;
 
                         deallocateCharArray(args_exec, count);
                         return 0;
                     }
+
+                    // Could not execute within path, also an error
+                    printErr();
+                    return 0;
                 }
                 else {
                     // This is the parent process
