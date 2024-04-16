@@ -8,6 +8,8 @@
 #include <vector>
 #include <cstring>
 
+#include <error.h>
+
 using namespace std;
 
 char** vectorOfStringToCharArray(const std::vector<std::string>& vec) {
@@ -135,10 +137,9 @@ int main(int argc, char* argv[]) {
 
                         execv(path.c_str(), args_exec);
 
-                        // If we reach here, an error occured
-                        // ?? TODO: reroute err of terminal command using pipes or dup2?
-                        // Asked this question on piazza
-                        // Potential fix: https://stackoverflow.com/questions/7292642/grabbing-output-from-exec
+                        printErr();
+
+                        cout << strerror(errno) << endl;
 
                         deallocateCharArray(args_exec, count);
                         return 0;
