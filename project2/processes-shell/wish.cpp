@@ -5,6 +5,7 @@
 #include <unistd.h> // for getpid()
 #include <sys/wait.h> // for wait()
 #include <memory> // for unique_ptr
+#include <fcntl.h> // for open()
 #include <vector>
 #include <cstring>
 
@@ -97,14 +98,17 @@ int main(int argc, char* argv[]) {
     while (true) {
         string line;
         
-        if (!getline(*in, line) && readFromFile) {
+        if (readFromFile && (*in).eof()) {
             return 0;
         }
+
+        getline(*in, line);
 
         istringstream iss(line);
         vector<string> inputs = split(line, '&');
 
         for (string input : inputs) {
+            // TODO: Account for file redirection (> may not always be separated by spaces) ??
             vector<string> args = split(input, ' ');
 
             if (args.empty()) {
@@ -128,7 +132,6 @@ int main(int argc, char* argv[]) {
                 }
             }
             else if (cmd == "path") {
-                searchPaths.clear();
                 searchPaths = vector<string>(args.begin() + 1, args.end());
             }
             else {
@@ -141,6 +144,30 @@ int main(int argc, char* argv[]) {
                         if (access((path + "/" + cmd).c_str(), X_OK)) {
                             // Cannot access file
                             continue;
+                        }
+
+                        int indexOfFileRedirector = count - 1;
+                        while (indexOfFileRedirector >= 0 && args[indexOfFileRedirector] != ">") {
+                            --indexOfFileRedirector;
+                        }
+
+                        if (indexOfFileRedirector != -1 && indexOfFileRedirector == count - 2) {
+                            // we need to output to a file instead of standard out
+                            int fileDescriptor = open(args[count - 1].c_str(), O_WRONLY);
+                            
+                            if (fileDescriptor < 0) {
+                                printErr();
+                                return 0;
+                            }
+
+                            args.pop_back();
+                            args.pop_back();
+                            
+                            dup2(STDOUT_FILENO, fileDescriptor);
+                        }
+                        else if (indexOfFileRedirector != -1) {
+                            printErr();
+                            return 0;
                         }
 
                         char** args_exec = vectorOfStringToCharArray(args);
