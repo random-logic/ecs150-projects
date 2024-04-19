@@ -15,13 +15,15 @@ using namespace std;
 
 char** vectorOfStringToCharArray(const std::vector<std::string>& vec) {
     // Allocate memory for the array of char pointers
-    char** charArray = new char*[vec.size()];
+    char** charArray = new char*[vec.size() + 1]; // +1 for nullptr at the end
 
     // Populate the array with dynamically allocated char arrays
     for (size_t i = 0; i < vec.size(); ++i) {
         charArray[i] = new char[vec[i].size() + 1]; // +1 for null terminator
         strcpy(charArray[i], vec[i].c_str());
     }
+
+    charArray[vec.size()] = nullptr;
 
     return charArray;
 }
@@ -65,7 +67,7 @@ vector<string> split(const string& str, const char sep) {
     section = trim(str);
     int n = section.size();
 
-    if (n > 0 && section[n - 1] == sep) {
+    if (n <= 0 || section[n - 1] == sep) {
         res.push_back("");
     }
 
@@ -132,6 +134,11 @@ int main(int argc, char* argv[]) {
             if (args.size() == 2) {
                 redirectToFile = true;
                 fileToRedirectTo = args[1];
+
+                if (split(fileToRedirectTo, ' ')[0] != fileToRedirectTo) {
+                    printErr();
+                    continue;
+                }
             }
             
             args = split(args[0], ' ');
@@ -177,14 +184,14 @@ int main(int argc, char* argv[]) {
                         }
 
                         if (redirectToFile) {
-                            int fileDescriptor = open(fileToRedirectTo.c_str(), O_WRONLY);
+                            int fileDescriptor = open(fileToRedirectTo.c_str(), O_WRONLY | O_CREAT);
 
                             if (fileDescriptor < 0) {
                                 printErr();
                                 return 0;
                             }
 
-                            dup2(STDOUT_FILENO, fileDescriptor);
+                            dup2(fileDescriptor, STDOUT_FILENO);
                         }
 
                         char** args_exec = vectorOfStringToCharArray(args);
@@ -202,11 +209,11 @@ int main(int argc, char* argv[]) {
                     printErr();
                     return 0;
                 }
-                else {
-                    // This is the parent process
-                    wait(NULL);
-                }
             }
+        }
+
+        for (size_t i = 0; i < inputs.size(); ++i) {
+            wait(NULL);
         }
     }
 
