@@ -62,6 +62,13 @@ vector<string> split(const string& str, const char sep) {
         res.push_back(section);
     }
 
+    section = trim(str);
+    int n = section.size();
+
+    if (n > 0 && section[n - 1] == sep) {
+        res.push_back("");
+    }
+
     return res;
 }
 
@@ -108,14 +115,37 @@ int main(int argc, char* argv[]) {
         vector<string> inputs = split(line, '&');
 
         for (string input : inputs) {
-            // TODO: Account for file redirection (> may not always be separated by spaces) ??
-            vector<string> args = split(input, ' ');
-
-            if (args.empty()) {
+            if (input == "") {
                 continue;
             }
 
+            vector<string> args = split(input, '>');
+
+            if (args.size() > 2) {
+                printErr();
+                continue;
+            }
+
+            bool redirectToFile = false;
+            string fileToRedirectTo;
+
+            if (args.size() == 2) {
+                redirectToFile = true;
+                fileToRedirectTo = args[1];
+            }
+            
+            args = split(args[0], ' ');
+
             int count = args.size();
+
+            if (count == 0) {
+                if (redirectToFile) {
+                    printErr();
+                }
+
+                continue;
+            }
+
             string cmd = args[0];
 
             if (cmd == "exit") {
@@ -146,28 +176,15 @@ int main(int argc, char* argv[]) {
                             continue;
                         }
 
-                        int indexOfFileRedirector = count - 1;
-                        while (indexOfFileRedirector >= 0 && args[indexOfFileRedirector] != ">") {
-                            --indexOfFileRedirector;
-                        }
+                        if (redirectToFile) {
+                            int fileDescriptor = open(fileToRedirectTo.c_str(), O_WRONLY);
 
-                        if (indexOfFileRedirector != -1 && indexOfFileRedirector == count - 2) {
-                            // we need to output to a file instead of standard out
-                            int fileDescriptor = open(args[count - 1].c_str(), O_WRONLY);
-                            
                             if (fileDescriptor < 0) {
                                 printErr();
                                 return 0;
                             }
 
-                            args.pop_back();
-                            args.pop_back();
-                            
                             dup2(STDOUT_FILENO, fileDescriptor);
-                        }
-                        else if (indexOfFileRedirector != -1) {
-                            printErr();
-                            return 0;
                         }
 
                         char** args_exec = vectorOfStringToCharArray(args);
