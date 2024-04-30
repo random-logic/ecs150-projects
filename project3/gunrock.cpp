@@ -31,6 +31,7 @@ string LOGFILE = "/dev/null";
 
 vector<HttpService *> services;
 
+// find a service that is registered for this path prefix
 HttpService *find_service(HTTPRequest *request) {
    // find a service that is registered for this path prefix
   for (unsigned int idx = 0; idx < services.size(); idx++) {
@@ -42,7 +43,7 @@ HttpService *find_service(HTTPRequest *request) {
   return NULL;
 }
 
-
+// invoke the service if we found one
 void invoke_service_method(HttpService *service, HTTPRequest *request, HTTPResponse *response) {
   stringstream payload;
 
@@ -60,6 +61,8 @@ void invoke_service_method(HttpService *service, HTTPRequest *request, HTTPRespo
   }
 }
 
+// read in the request
+// send data back to the client and clean up
 void handle_request(MySocket *client) {
   HTTPRequest *request = new HTTPRequest(client, PORT);
   HTTPResponse *response = new HTTPResponse();
