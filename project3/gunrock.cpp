@@ -141,6 +141,8 @@ int main(int argc, char *argv[]) {
   set_log_file(LOGFILE);
 
   sync_print("init", "");
+
+  // Create server and client
   MyServerSocket *server = new MyServerSocket(PORT);
   MySocket *client;
 
@@ -148,6 +150,7 @@ int main(int argc, char *argv[]) {
   // for path prefix matching
   services.push_back(new FileService(BASEDIR));
   
+  // TODO: Figure out what this is doing??
   while(true) {
     sync_print("waiting_to_accept", "");
     client = server->accept();

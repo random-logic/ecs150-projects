@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+// setup server and listen on port
 MyServerSocket::MyServerSocket(int port)
 {
     struct sockaddr_in server;
