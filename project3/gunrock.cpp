@@ -63,6 +63,7 @@ void invoke_service_method(HttpService *service, HTTPRequest *request, HTTPRespo
 
 // read in the request
 // send data back to the client and clean up
+// This is what the main function calls every time we get request from the server
 void handle_request(MySocket *client) {
   HTTPRequest *request = new HTTPRequest(client, PORT);
   HTTPResponse *response = new HTTPResponse();
@@ -150,11 +151,10 @@ int main(int argc, char *argv[]) {
   // for path prefix matching
   services.push_back(new FileService(BASEDIR));
   
-  // TODO: Figure out what this is doing??
   while(true) {
     sync_print("waiting_to_accept", "");
-    client = server->accept();
+    client = server->accept(); // Get client
     sync_print("client_accepted", "");
-    handle_request(client);
+    handle_request(client); // Handle the client
   }
 }
