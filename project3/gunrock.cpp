@@ -31,6 +31,11 @@ string LOGFILE = "/dev/null";
 
 vector<HttpService *> services;
 
+vector<pthread_t *> thread_pool;
+deque<MySocket *> buffer;
+pthread_mutex_t * lock = new pthread_mutex_t();
+pthread_cond_t * enqueue = new pthread_cond_t();
+
 // find a service that is registered for this path prefix
 HttpService *find_service(HTTPRequest *request) {
    // find a service that is registered for this path prefix
@@ -108,6 +113,25 @@ void handle_request(MySocket *client) {
   delete client;
 }
 
+void* start_thread(void * arg) {
+  while (true) {
+    dthread_mutex_lock(lock);
+
+    while (buffer.empty()) {
+      int ret = dthread_cond_wait(enqueue, lock);
+      if (ret != 0) {
+        cerr << "dthread_cond_wait error number " << ret << endl;
+      }
+    }
+
+    MySocket* client = buffer.front();
+    buffer.pop_front();
+    dthread_mutex_unlock(lock);
+
+    handle_request(client);
+  }
+}
+
 int main(int argc, char *argv[]) {
 
   signal(SIGPIPE, SIG_IGN);
@@ -150,11 +174,31 @@ int main(int argc, char *argv[]) {
   // The order that you push services dictates the search order
   // for path prefix matching
   services.push_back(new FileService(BASEDIR));
+
+  // Add the threads to handle the clients
+  thread_pool = vector<pthread_t *>(THREAD_POOL_SIZE);
+  for (pthread_t *& thread : thread_pool) {
+    thread = new pthread_t();
+    int ret = dthread_create(thread, NULL, start_thread, NULL);
+    if (ret != 0) {
+      cerr << "dthread_create error number " << ret;
+      exit(1);
+    }
+
+    ret = dthread_detach(*thread);
+    if (ret != 0) {
+      cerr << "dthread_detach error number " << ret;
+      exit(1);
+    }
+  }
   
   while(true) {
     sync_print("waiting_to_accept", "");
     client = server->accept(); // Get client
     sync_print("client_accepted", "");
-    handle_request(client); // Handle the client
+    dthread_mutex_lock(lock);
+    buffer.push_back(client);
+    dthread_cond_signal(enqueue);
+    dthread_mutex_unlock(lock);
   }
 }
