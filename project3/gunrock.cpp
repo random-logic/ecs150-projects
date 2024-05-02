@@ -34,6 +34,7 @@ vector<HttpService *> services;
 vector<pthread_t *> thread_pool;
 deque<MySocket *> buffer;
 pthread_mutex_t * lock = new pthread_mutex_t();
+pthread_cond_t * dequeue = new pthread_cond_t();
 pthread_cond_t * enqueue = new pthread_cond_t();
 
 // find a service that is registered for this path prefix
@@ -126,6 +127,7 @@ void* start_thread(void * arg) {
 
     MySocket* client = buffer.front();
     buffer.pop_front();
+    dthread_cond_signal(dequeue);
     dthread_mutex_unlock(lock);
 
     handle_request(client);
@@ -194,6 +196,11 @@ int main(int argc, char *argv[]) {
   
   while(true) {
     sync_print("waiting_to_accept", "");
+    dthread_mutex_lock(lock);
+    while ((int)buffer.size() >= BUFFER_SIZE) {
+      dthread_cond_wait(dequeue, lock);
+    }
+    dthread_mutex_unlock(lock);
     client = server->accept(); // Get client
     sync_print("client_accepted", "");
     dthread_mutex_lock(lock);
