@@ -38,6 +38,12 @@ bool FileService::endswith(string str, string suffix) {
 // Sends it back as an http response (passed in pointer)
 void FileService::get(HTTPRequest *request, HTTPResponse *response) {
   string path = this->m_basedir + request->getPath(); // get the file in our work directory
+
+  if (path.find("..") != string::npos) {
+    response->setStatus(403);
+    return;
+  }
+
   string fileContents = this->readFile(path); // read file
   if (fileContents.size() == 0) {
     // No file contents

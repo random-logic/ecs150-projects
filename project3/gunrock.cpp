@@ -33,9 +33,9 @@ vector<HttpService *> services;
 
 vector<pthread_t *> thread_pool;
 deque<MySocket *> buffer;
-pthread_mutex_t * lock = new pthread_mutex_t();
-pthread_cond_t * dequeue = new pthread_cond_t();
-pthread_cond_t * enqueue = new pthread_cond_t();
+pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t dequeue = PTHREAD_COND_INITIALIZER;
+pthread_cond_t enqueue = PTHREAD_COND_INITIALIZER;
 
 // find a service that is registered for this path prefix
 HttpService *find_service(HTTPRequest *request) {
@@ -116,10 +116,10 @@ void handle_request(MySocket *client) {
 
 void* start_thread(void * arg) {
   while (true) {
-    dthread_mutex_lock(lock);
+    dthread_mutex_lock(&lock);
 
     while (buffer.empty()) {
-      int ret = dthread_cond_wait(enqueue, lock);
+      int ret = dthread_cond_wait(&enqueue, &lock);
       if (ret != 0) {
         cerr << "dthread_cond_wait error number " << ret << endl;
       }
@@ -127,8 +127,8 @@ void* start_thread(void * arg) {
 
     MySocket* client = buffer.front();
     buffer.pop_front();
-    dthread_cond_signal(dequeue);
-    dthread_mutex_unlock(lock);
+    dthread_cond_signal(&dequeue);
+    dthread_mutex_unlock(&lock);
 
     handle_request(client);
   }
@@ -196,16 +196,16 @@ int main(int argc, char *argv[]) {
   
   while(true) {
     sync_print("waiting_to_accept", "");
-    dthread_mutex_lock(lock);
-    while ((int)buffer.size() >= BUFFER_SIZE) {
-      dthread_cond_wait(dequeue, lock);
+    dthread_mutex_lock(&lock);
+    while (buffer.size() >= static_cast<size_t>(BUFFER_SIZE)) {
+      dthread_cond_wait(&dequeue, &lock);
     }
-    dthread_mutex_unlock(lock);
+    dthread_mutex_unlock(&lock);
     client = server->accept(); // Get client
     sync_print("client_accepted", "");
-    dthread_mutex_lock(lock);
+    dthread_mutex_lock(&lock);
     buffer.push_back(client);
-    dthread_cond_signal(enqueue);
-    dthread_mutex_unlock(lock);
+    dthread_cond_signal(&enqueue);
+    dthread_mutex_unlock(&lock);
   }
 }
