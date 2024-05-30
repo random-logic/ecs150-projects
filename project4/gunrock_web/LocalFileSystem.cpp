@@ -22,14 +22,14 @@ LocalFileSystem::LocalFileSystem(Disk *disk) {
 void LocalFileSystem::readSuperBlock(super_t *super) {
   char buffer[UFS_BLOCK_SIZE];
   this->disk->readBlock(0, buffer);
-  std::memcpy(super, buffer, sizeof(super_t));
+  memcpy(super, buffer, sizeof(super_t));
 }
 
 int LocalFileSystem::lookup(int parentInodeNumber, string name) {
   super_t super_block;
   readSuperBlock(&super_block);
 
-  if (parentInodeNumber < 0 || parentInodeNumber >= super_block.num_inodes)
+  if (!isValidInodeNumber(super_block, parentInodeNumber))
     return -EINVALIDINODE;
 
   inode_t theParentInode;
@@ -47,7 +47,7 @@ int LocalFileSystem::stat(int inodeNumber, inode_t *inode) {
   super_t super_block;
   readSuperBlock(&super_block);
 
-  if (inodeNumber < 0 || inodeNumber >= super_block.num_inodes)
+  if (!isValidInodeNumber(super_block, inodeNumber))
     return -EINVALIDINODE;
 
   int theBlockToRead = super_block.inode_region_addr + inodeNumber * sizeof(inode_t) / UFS_BLOCK_SIZE;
@@ -56,7 +56,7 @@ int LocalFileSystem::stat(int inodeNumber, inode_t *inode) {
   char buffer[UFS_BLOCK_SIZE];
   this->disk->readBlock(theBlockToRead, buffer);
 
-  std::memcpy(inode, buffer + theInodeOffset, sizeof(inode_t));
+  memcpy(inode, buffer + theInodeOffset, sizeof(inode_t));
 
   return 0;
 }
@@ -65,7 +65,7 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   super_t super_block;
   readSuperBlock(&super_block);
 
-  if (inodeNumber < 0 || inodeNumber >= super_block.num_inodes)
+  if (!isValidInodeNumber(super_block, inodeNumber))
     return -EINVALIDINODE;
 
   if (size < 0)
@@ -78,6 +78,9 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   int theActualSize = min(size, theInode.size);
   int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
   int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
+  if (theSizeOnTheLastBlock == 0) {
+    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+  }
 
   // Read everything the inode points to
   for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
@@ -90,7 +93,7 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
     int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
     bool isLastBlock = i == theNumberOfBlocksToRead - 1;
     int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
-    std::memcpy(buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
+    memcpy(buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
   }
 
   return 0;
@@ -100,15 +103,23 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   super_t super_block;
   readSuperBlock(&super_block);
 
+  // Check input
+  #pragma region
   // Check if it's a valid inode and valid name
-  if (parentInodeNumber < 0 || parentInodeNumber >= super_block.num_inodes)
+  if (!isValidInodeNumber(super_block, parentInodeNumber))
     return -EINVALIDINODE;
 
-  if (name.size() >= DIR_ENT_NAME_SIZE) // Need one more char for \0
+  if (!isValidName(name))
     return -EINVALIDNAME;
+
+  // Make sure it's a valid type
+  if (type != UFS_DIRECTORY && type != UFS_REGULAR_FILE)
+    return -EINVALIDTYPE;
+  #pragma endregion
 
   // Get stat of associated parent inode
   inode_t parentInode;
+  #pragma region
   this->stat(parentInodeNumber, &parentInode);
 
   // Make sure it's a directory
@@ -118,38 +129,28 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   // Make sure we have enough space in the inode to add an entry
   if (parentInode.size == UFS_BLOCK_SIZE * DIRECT_PTRS)
     return -ENOTENOUGHSPACE;
-
-  // Make sure it's a valid type
-  if (type != UFS_DIRECTORY && type != UFS_REGULAR_FILE) {
-    return -EINVALIDTYPE;
-  }
+  #pragma endregion
 
   // Check if the name already exists
-  const int theDirectSize = ceilDiv(parentInode.size, UFS_BLOCK_SIZE);
-  
-  for (int i = 0; i < theDirectSize; ++i) {
-    dir_ent_t theEntriesBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
-    int blockNumber = parentInode.direct[i];
+  int theNumberOfParentEntries = parentInode.size / sizeof(dir_ent_t);
+  dir_ent_t theParentEntries[theNumberOfParentEntries];
+  this->read(parentInodeNumber, theParentEntries, theNumberOfParentEntries * sizeof(dir_ent_t));
 
-    this->disk->readBlock(blockNumber, theEntriesBlock);
+  for (int i = 0; i < theNumberOfParentEntries; ++i) {
+    dir_ent_t theEntryToCheck = theParentEntries[i];
+    string theEntryName(theEntryToCheck.name);
 
-    bool isLastBlock = i == theDirectSize - 1;
-    int numEntriesInLastBlock = parentInode.size % UFS_BLOCK_SIZE / THE_ENTRIES_PER_BLOCK_CONSTANT;
-    int numberOfEntries = isLastBlock ? numEntriesInLastBlock : THE_ENTRIES_PER_BLOCK_CONSTANT;
+    if (theEntryName == name) {
+      // Check to see if the type matches
+      inode_t inode;
+      this->stat(theEntryToCheck.inum, &inode);
 
-    for (int j = 0; j < numberOfEntries; ++j) {
-      if (theEntriesBlock[j].name == name) {
-        // Check to see if the type matches
-        inode_t inode;
-        this->stat(theEntriesBlock[j].inum, &inode);
-
-        if (inode.type == type) {
-          return 0;
-        }
-        else {
-          // This is an error if the types don't match
-          return -EINVALIDTYPE;
-        }
+      if (inode.type == type) {
+        return 0;
+      }
+      else {
+        // This is an error if the types don't match
+        return -EINVALIDTYPE;
       }
     }
   }
@@ -170,8 +171,20 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   inode_t theInodeBlock[THE_INODES_PER_BLOCK_CONSTANT];
   this->disk->readBlock(theInodeBlockNumber, theInodeBlock);
 
-  theInodeBlock[theAvailableInodeBit].size = 0;
   theInodeBlock[theAvailableInodeBit].type = type;
+
+  if (type == UFS_DIRECTORY) {
+    // This is a directory
+    // We need to create two entries for it
+    // One for "." pointing to this path
+    // The other one ".." pointing to parent
+    // TODO ??
+    theInodeBlock[theAvailableInodeBit].size = 2 * sizeof(dir_ent_t);
+  }
+  else {
+    // This is a file, it's empty
+    theInodeBlock[theAvailableInodeBit].size = 0;
+  }
 
   setBit(theInodeBitmap, theAvailableInodeBit);
 
@@ -206,6 +219,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   }
   else {
     // Can just append to the data in the last block
+    int theDirectSize = parentInode.size / sizeof(dir_ent_t);
     int theLastBlockIdx = theDirectSize - 1;
     theEntriesBlockNumber = parentInode.direct[theLastBlockIdx];
     
@@ -250,10 +264,35 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   super_t super_block;
   readSuperBlock(&super_block);
 
-  if (parentInodeNumber < 0 || parentInodeNumber >= super_block.num_inodes)
+  if (!isValidInodeNumber(super_block, parentInodeNumber))
     return -EINVALIDINODE;
 
-  // TODO: ??
+  if (!isValidName(name))
+    return -EINVALIDNAME;
+
+  // Get parent inode
+  inode_t theParentInode;
+  this->stat(parentInodeNumber, &theParentInode);
+
+  // Read blocks in parent inode
+  int theNumberOfEntries = theParentInode.size / sizeof(dir_ent_t);
+  dir_ent_t theEntries[theNumberOfEntries];
+  this->read(parentInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
+
+  for (int i = 0; i < theNumberOfEntries; ++i) {
+    if (string(theEntries[i].name) == name) {
+      // Found it
+      inode_t theEntryInode;
+      this->stat(theEntries[i].inum, &theEntryInode);
+
+      if (theEntryInode.type == UFS_DIRECTORY) {
+        // This is a directory, only delete if it's empty
+      }
+      else {
+        // This is a file, we can just delete it
+      }
+    }
+  }
 
   return 0;
 }
@@ -387,4 +426,17 @@ int getFirstAvailableBit(unsigned char * bitmap, int len) {
   }
 
   return -1;
+}
+
+inline bool isValidInodeNumber(super_t & super, int num) {
+  return num < 0 || num >= super.num_inodes;
+}
+
+inline bool isValidName(string & name) {
+  // Need one more char for null terminating
+  return name.size() < DIR_ENT_NAME_SIZE && name != ".." && name != ".";
+}
+
+int checkIfNameExists() {
+  // ??
 }
