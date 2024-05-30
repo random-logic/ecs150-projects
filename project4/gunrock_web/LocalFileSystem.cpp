@@ -126,7 +126,6 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
 
   // Check if the name already exists
   const int theDirectSize = ceilDiv(parentInode.size, UFS_BLOCK_SIZE);
-  bool nameExists = false;
   
   for (int i = 0; i < theDirectSize; ++i) {
     dir_ent_t theEntriesBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
@@ -139,12 +138,20 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     int numberOfEntries = isLastBlock ? numEntriesInLastBlock : THE_ENTRIES_PER_BLOCK_CONSTANT;
 
     for (int j = 0; j < numberOfEntries; ++j) {
-      // ?? TODO - finish checking if the name exists in current entries
-    }
-  }
+      if (theEntriesBlock[j].name == name) {
+        // Check to see if the type matches
+        inode_t inode;
+        this->stat(theEntriesBlock[j].inum, &inode);
 
-  if (nameExists) {
-    // ?? TODO
+        if (inode.type == type) {
+          return 0;
+        }
+        else {
+          // This is an error if the types don't match
+          return -EINVALIDTYPE;
+        }
+      }
+    }
   }
 
   // Find the first inode bit that is available
@@ -152,15 +159,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   unsigned char theInodeBitmap[LEN_INODE_BITMAP_ARR];
   this->readInodeBitmap(&super_block, theInodeBitmap);
 
-  const int TOTAL_BITS_IN_INODE_BITMAP = LEN_INODE_BITMAP_ARR * 8;
-  int theAvailableInodeBit = -1;
-
-  for (int i = 0; i < TOTAL_BITS_IN_INODE_BITMAP; ++i) {
-    if (getBit(theInodeBitmap, i)) {
-      theAvailableInodeBit = i;
-      break;
-    }
-  }
+  int theAvailableInodeBit = getFirstAvailableBit(theInodeBitmap, LEN_INODE_BITMAP_ARR);
 
   if (theAvailableInodeBit < 0) {
     return -ENOTENOUGHSPACE;
@@ -179,11 +178,31 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   // Now we need to add an entry
   int theEntriesBlockNumber = -1;
   dir_ent_t theEntriesBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
+  
+  bool isNewBlock = false;
+  const int LEN_DATA_BITMAP_ARRAY_CONSTANT = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
+  unsigned char theDataBitmap[LEN_DATA_BITMAP_ARRAY_CONSTANT];
 
   // Check if we need to create a new block
   if (parentInode.size % UFS_BLOCK_SIZE == 0) {
     // Need to create a new data block
-    // ?? TODO
+    theEntriesBlock[0].inum = theAvailableInodeBit;
+    strcpy(theEntriesBlock[0].name, name.c_str());
+
+    for (int i = 1; i < THE_ENTRIES_PER_BLOCK_CONSTANT; ++i) {
+      theEntriesBlock[i].inum = -1;
+    }
+
+    // Read bitmap to find the first available data block to write to
+    this->readDataBitmap(&super_block, theDataBitmap);
+
+    int theFirstAvailableBitInDataBlock = getFirstAvailableBit(theDataBitmap, LEN_DATA_BITMAP_ARRAY_CONSTANT);
+    if (theFirstAvailableBitInDataBlock == -1) {
+      return -ENOTENOUGHSPACE;
+    }
+
+    theEntriesBlockNumber = theFirstAvailableBitInDataBlock;
+    isNewBlock = true;
   }
   else {
     // Can just append to the data in the last block
@@ -205,6 +224,9 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   // Now we need to write the changes to the disk (inode bitmap, inode block, and data block)
   this->disk->beginTransaction();
   this->writeInodeBitmap(&super_block, theInodeBitmap);
+  if (isNewBlock) {
+    this->writeDataBitmap(&super_block, theDataBitmap);
+  }
   this->disk->writeBlock(theEntriesBlockNumber, theEntriesBlock);
   this->disk->writeBlock(theInodeBlockNumber, theInodeBlock);
   this->disk->commit();
@@ -354,4 +376,15 @@ void clearBit(unsigned char * bitmap, int bit) {
 
 int ceilDiv(int num, int den) {
   return (num + den - 1) / den;
+}
+
+// Note - len is the length of the array, number of bits is len * 8
+int getFirstAvailableBit(unsigned char * bitmap, int len) {
+  for (int i = 0; i < len * 8; ++i) {
+    if (getBit(bitmap, i)) {
+      return i;
+    }
+  }
+
+  return -1;
 }
