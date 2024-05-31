@@ -435,8 +435,8 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   #pragma region
   memcpy(theEntriesAfterRemoval, theEntries, idxToRemove * sizeof(dir_ent_t));
   memcpy(
-    theEntriesAfterRemoval + idxToRemove, 
-    theEntries + idxToRemove + 1, 
+    theEntriesAfterRemoval + idxToRemove * sizeof(dir_ent_t), 
+    theEntries + (idxToRemove + 1) * sizeof(dir_ent_t), 
     theNumberOfEntries - idxToRemove * sizeof(dir_ent_t)
   );
   #pragma endregion
