@@ -38,9 +38,17 @@ int LocalFileSystem::lookup(int parentInodeNumber, string name) {
   if (theParentInode.type != UFS_DIRECTORY)
     return -EINVALIDINODE;
 
-  // TODO: implement ??
+  // Get all the entries
+  int theNumberOfEntries = theParentInode.size / sizeof(dir_ent_t);
+  dir_ent_t theEntries[theNumberOfEntries];
+  this->read(parentInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
 
-  return 0;
+  // Search which one matches
+  for (dir_ent_t theEntry : theEntries)
+    if (string(theEntry.name) == name)
+      return theEntry.inum;
+
+  return -ENOTFOUND;
 }
 
 int LocalFileSystem::stat(int inodeNumber, inode_t *inode) {
@@ -187,7 +195,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
 
   // Now create a new inode for the contents of this entry
   int theCreatedBlockNumber = -1;
-  dir_ent_t theEntriesBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
+  dir_ent_t theCreatedBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
   #pragma region
   theInodes[theAvailableInodeNumber].type = type;
 
@@ -196,20 +204,20 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     // We need to create two entries for it
     // One for "." pointing to this path
     // The other one ".." pointing to parent
+
     // Get the first available data block, and set it in bitmap
     theCreatedBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
 
-    if (theCreatedBlockNumber == -1) {
+    if (theCreatedBlockNumber == -1)
       return -ENOTENOUGHSPACE;
-    }
 
     setBit(theDataBitmap, theCreatedBlockNumber);
     
     // Init the entries block appropriately
-    theEntriesBlock[0].inum = theAvailableInodeNumber;
-    strcpy(theEntriesBlock[0].name, ".");
-    theEntriesBlock[1].inum = parentInodeNumber;
-    strcpy(theEntriesBlock[1].name, "..");
+    theCreatedBlock[0].inum = theAvailableInodeNumber;
+    strcpy(theCreatedBlock[0].name, ".");
+    theCreatedBlock[1].inum = parentInodeNumber;
+    strcpy(theCreatedBlock[1].name, "..");
 
     // Set the appropriate size
     theInodes[theAvailableInodeNumber].size = 2 * sizeof(dir_ent_t);
@@ -271,6 +279,8 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   this->writeInodeRegion(&super_block, theInodes);
 
   this->disk->writeBlock(theEntriesBlockNumber, theEntriesBlock);
+  if (theCreatedBlockNumber != -1)
+    this->disk->writeBlock(theCreatedBlockNumber, theCreatedBlock);
   
   this->disk->commit();
   #pragma endregion
@@ -287,7 +297,7 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
   if (!isValidInodeNumber(super_block, inodeNumber))
     return -EINVALIDINODE;
 
-  if (size < 0)
+  if (size < 0 || size > MAX_FILE_SIZE)
     return -EINVALIDSIZE;
   #pragma endregion
 
@@ -300,25 +310,65 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
     return -EINVALIDTYPE;
   #pragma endregion
 
-  // Get the data bitmap
-  unsigned char dataBitmap[];
+  // Get data bitmap
+  const int theLenOfDataBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
+  unsigned char theDataBitmap[theLenOfDataBitmapArr];
+  this->readDataBitmap(&super_block, theDataBitmap);
 
   // See if we need to allocate or deallocate blocks
+  // After this, we will have exactly the number of blocks needed in our inode
   int theNumberOfBlocksPresent = ceilDiv(theInode.size, UFS_BLOCK_SIZE);
   int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
   int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
   int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
+  #pragma region
+  if (theNumberOfBlocksNeeded + theNumberOfBlocksPresent > DIRECT_PTRS)
+    return -ENOTENOUGHSPACE;
 
   for (int i = 0; i < theNumberOfBlocksToAllocate; ++i) {
-    // ??
+    int idx = theNumberOfBlocksPresent + i; // Append at the end
+    
+    // Get the first available data block number, and set that bit
+    int theAvailableBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    if (theAvailableBlockNumber == -1)
+      return -ENOTENOUGHSPACE;
+    setBit(theDataBitmap, theAvailableBlockNumber);
+
+    // Set the available block number in inode
+    theInode.direct[idx] = theAvailableBlockNumber;
   }
 
-  // TODO ??
+  for (int i = 1; i <= theNumberOfBlocksToDeallocate; ++i) {
+    int idx = theNumberOfBlocksPresent - i; // Start deallocating from the end
+    int theBlockNumberToFree = theInode.direct[idx];
+
+    // Clear the bit to deallocate
+    clearBit(theDataBitmap, theBlockNumberToFree);
+  }
+  #pragma endregion
+
+  // Get the size of the last block
   int theSizeOnTheLastBlock = theInode.size % UFS_BLOCK_SIZE;
   if (theSizeOnTheLastBlock == 0)
     theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
 
-  
+  // Do write
+  #pragma region
+  this->disk->beginTransaction();
+  this->writeDataBitmap(&super_block, theDataBitmap);
+
+  // Write to all the blocks
+  for (int i = 0; i < theNumberOfBlocksNeeded; ++i) {
+    bool isLastBlock = i == theNumberOfBlocksNeeded - 1;
+    int size = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+    
+    int theBufferOffset = i * UFS_BLOCK_SIZE;
+    int theBlockNumber = theInode.direct[i];
+    this->disk->writeBlock(theBlockNumber, const_cast<void*>(buffer) + theBufferOffset);
+  }
+
+  this->disk->commit();
+  #pragma endregion
 
   return 0;
 }
@@ -327,11 +377,17 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   super_t super_block;
   readSuperBlock(&super_block);
 
+  // Check inputs
+  #pragma region
   if (!isValidInodeNumber(super_block, parentInodeNumber))
     return -EINVALIDINODE;
 
   if (!isValidName(name))
     return -EINVALIDNAME;
+
+  if (!unlinkAllowed(name))
+    return -EUNLINKNOTALLOWED;
+  #pragma endregion
 
   // Get parent inode
   inode_t theParentInode;
@@ -342,6 +398,9 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   dir_ent_t theEntries[theNumberOfEntries];
   this->read(parentInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
 
+  // Find the corresponding block to remove
+  int idxToRemove = -1;
+  #pragma region
   for (int i = 0; i < theNumberOfEntries; ++i) {
     if (string(theEntries[i].name) == name) {
       // Found it
@@ -350,12 +409,41 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
 
       if (theEntryInode.type == UFS_DIRECTORY) {
         // This is a directory, only delete if it's empty
+        if (theEntryInode.size == sizeof(dir_ent_t) * 2) {
+          // Then only .. and . are present
+          idxToRemove = i;
+          break;
+        }
+        else {
+          return -EDIRNOTEMPTY;
+        }
       }
       else {
         // This is a file, we can just delete it
+        idxToRemove = i;
+        break;
       }
     }
   }
+  #pragma endregion
+
+  // Finish if there is nothing to remove
+  if (idxToRemove == -1)
+    return 0;
+
+  // Remove the corresponding block
+  dir_ent_t theEntriesAfterRemoval[theNumberOfEntries - 1];
+  #pragma region
+  memcpy(theEntriesAfterRemoval, theEntries, idxToRemove * sizeof(dir_ent_t));
+  memcpy(
+    theEntriesAfterRemoval + idxToRemove, 
+    theEntries + idxToRemove + 1, 
+    theNumberOfEntries - idxToRemove * sizeof(dir_ent_t)
+  );
+  #pragma endregion
+
+  // Now write the changes
+  this->write(parentInodeNumber, theEntriesAfterRemoval, theNumberOfEntries - 1);
 
   return 0;
 }
@@ -485,5 +573,9 @@ inline bool isValidInodeNumber(super_t & super, int num) {
 
 inline bool isValidName(string & name) {
   // Need one more char for null terminating
-  return name.size() < DIR_ENT_NAME_SIZE && name != ".." && name != ".";
+  return name.size() < DIR_ENT_NAME_SIZE;
+}
+
+inline bool unlinkAllowed(string & name) {
+  return name != "." && name != "..";
 }
