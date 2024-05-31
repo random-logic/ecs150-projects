@@ -244,9 +244,8 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
 
     // Read bitmap to find the first available data block to write to
     theEntriesBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
-    if (theEntriesBlockNumber == -1) {
+    if (theEntriesBlockNumber == -1)
       return -ENOTENOUGHSPACE;
-    }
 
     // Add the new block to our parent
     int theIdxToAppendToParentInodeDirect = parentInode.size / UFS_BLOCK_SIZE;
