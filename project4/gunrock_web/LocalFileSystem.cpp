@@ -178,6 +178,8 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   #pragma endregion
 
   // Now create a new inode for the contents of this entry
+  int theCreatedBlockNumber = -1;
+  dir_ent_t theEntriesBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
   #pragma region
   theInodes[theAvailableInodeNumber].type = type;
 
@@ -186,9 +188,22 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     // We need to create two entries for it
     // One for "." pointing to this path
     // The other one ".." pointing to parent
-    // TODO ??
-    // Need to create another new inode
+    // Get the first available data block, and set it in bitmap
+    theCreatedBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
 
+    if (theCreatedBlockNumber == -1) {
+      return -ENOTENOUGHSPACE;
+    }
+
+    setBit(theDataBitmap, theCreatedBlockNumber);
+    
+    // Init the entries block appropriately
+    theEntriesBlock[0].inum = theAvailableInodeNumber;
+    strcpy(theEntriesBlock[0].name, ".");
+    theEntriesBlock[1].inum = parentInodeNumber;
+    strcpy(theEntriesBlock[1].name, "..");
+
+    // Set the appropriate size
     theInodes[theAvailableInodeNumber].size = 2 * sizeof(dir_ent_t);
   }
   else {
