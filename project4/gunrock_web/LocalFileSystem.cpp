@@ -65,22 +65,30 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   super_t super_block;
   readSuperBlock(&super_block);
 
+  // Check input
+  #pragma region
   if (!isValidInodeNumber(super_block, inodeNumber))
     return -EINVALIDINODE;
 
   if (size < 0)
     return -EINVALIDSIZE;
+  #pragma endregion
 
   // Stat the inode
   inode_t theInode;
+  #pragma region
   this->stat(inodeNumber, &theInode);
 
+  if (theInode.type != UFS_REGULAR_FILE)
+    return -EINVALIDTYPE;
+  #pragma endregion
+
+  // Get the sizes
   int theActualSize = min(size, theInode.size);
   int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
   int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
-  if (theSizeOnTheLastBlock == 0) {
+  if (theSizeOnTheLastBlock == 0)
     theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
-  }
 
   // Read everything the inode points to
   for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
@@ -274,10 +282,43 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
   super_t super_block;
   readSuperBlock(&super_block);
 
-  if (inodeNumber < 0 || inodeNumber >= super_block.num_inodes)
+  // Check input
+  #pragma region
+  if (!isValidInodeNumber(super_block, inodeNumber))
     return -EINVALIDINODE;
 
-  // TODO: ??
+  if (size < 0)
+    return -EINVALIDSIZE;
+  #pragma endregion
+
+  // Stat the inode
+  inode_t theInode;
+  #pragma region
+  this->stat(inodeNumber, &theInode);
+
+  if (theInode.type != UFS_REGULAR_FILE)
+    return -EINVALIDTYPE;
+  #pragma endregion
+
+  // Get the data bitmap
+  unsigned char dataBitmap[];
+
+  // See if we need to allocate or deallocate blocks
+  int theNumberOfBlocksPresent = ceilDiv(theInode.size, UFS_BLOCK_SIZE);
+  int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
+  int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
+  int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
+
+  for (int i = 0; i < theNumberOfBlocksToAllocate; ++i) {
+    // ??
+  }
+
+  // TODO ??
+  int theSizeOnTheLastBlock = theInode.size % UFS_BLOCK_SIZE;
+  if (theSizeOnTheLastBlock == 0)
+    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+
+  
 
   return 0;
 }
@@ -358,7 +399,7 @@ void LocalFileSystem::writeInodeBitmap(super_t *super, unsigned char *inodeBitma
 }
 
 void LocalFileSystem::readDataBitmap(super_t *super, unsigned char *dataBitmap) {
-  for (int i = 0; i < super->inode_bitmap_len; ++i) {
+  for (int i = 0; i < super->data_bitmap_len; ++i) {
     int theBlockToRead = super->data_bitmap_addr + i;
     auto theBufferStart = dataBitmap + i * UFS_BLOCK_SIZE;
     disk->readBlock(theBlockToRead, theBufferStart);
@@ -366,7 +407,7 @@ void LocalFileSystem::readDataBitmap(super_t *super, unsigned char *dataBitmap) 
 }
 
 void LocalFileSystem::writeDataBitmap(super_t *super, unsigned char *dataBitmap) {
-  for (int i = 0; i < super->inode_bitmap_len; ++i) {
+  for (int i = 0; i < super->data_bitmap_len; ++i) {
     int theBlockToRead = super->data_bitmap_addr + i;
     auto theBufferStart = dataBitmap + i * UFS_BLOCK_SIZE;
     disk->writeBlock(theBlockToRead, theBufferStart);
