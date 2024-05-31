@@ -410,6 +410,11 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
         // This is a directory, only delete if it's empty
         if (theEntryInode.size == sizeof(dir_ent_t) * 2) {
           // Then only .. and . are present
+          
+          // First we need to delete the corresponding data blocks that store .. and .
+          // TODO ??
+
+          // Set the directory entry for removal
           idxToRemove = i;
           break;
         }
