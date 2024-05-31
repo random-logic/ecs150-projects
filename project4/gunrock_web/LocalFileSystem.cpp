@@ -222,9 +222,6 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     parentInode.direct[theIdxToAppendToParentInodeDirect] = theEntriesBlockNumber;
   }
   else {
-    // Can just append to the data in the last block
-    // TODO ??
-    /*
     int theDirectSize = parentInode.size / sizeof(dir_ent_t);
     int theLastBlockIdx = theDirectSize - 1;
     theEntriesBlockNumber = parentInode.direct[theLastBlockIdx];
@@ -235,7 +232,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     // Now add it to the end of all the previous entries
     int theIdxToAddToInEntriesBlock = parentInode.size % UFS_BLOCK_SIZE;
     theEntriesBlock[theIdxToAddToInEntriesBlock].inum = theAvailableInodeNumber;
-    strcpy(theEntriesBlock[theIdxToAddToInEntriesBlock].name, name.c_str());*/
+    strcpy(theEntriesBlock[theIdxToAddToInEntriesBlock].name, name.c_str());
   }
 
   // Update the size of the parentInode
