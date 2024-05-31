@@ -117,11 +117,24 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     return -EINVALIDTYPE;
   #pragma endregion
 
-  // Get stat of associated parent inode
-  inode_t parentInode;
-  #pragma region
-  this->stat(parentInodeNumber, &parentInode);
+  // Get inode bitmap
+  const int theLenOfInodeBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
+  unsigned char theInodeBitmap[theLenOfInodeBitmapArr];
+  this->readInodeBitmap(&super_block, theInodeBitmap);
 
+  // Get inode array
+  const int theTotalNumberOfInodes = super_block.inode_region_len * UFS_BLOCK_SIZE / sizeof(inode_t);
+  inode_t theInodes[theTotalNumberOfInodes];
+  readInodeRegion(&super_block, theInodes);
+
+  // Get data bitmap
+  const int theLenOfDataBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
+  unsigned char theDataBitmap[theLenOfDataBitmapArr];
+  this->readDataBitmap(&super_block, theDataBitmap);
+
+  // Get parent inode
+  inode_t parentInode = theInodes[parentInodeNumber];
+  #pragma region
   // Make sure it's a directory
   if (parentInode.type != UFS_DIRECTORY)
     return -EINVALIDINODE;
@@ -132,20 +145,19 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   #pragma endregion
 
   // Check if the name already exists
-  int theNumberOfParentEntries = parentInode.size / sizeof(dir_ent_t);
+  const int theNumberOfParentEntries = parentInode.size / sizeof(dir_ent_t);
   dir_ent_t theParentEntries[theNumberOfParentEntries];
+  #pragma region
   this->read(parentInodeNumber, theParentEntries, theNumberOfParentEntries * sizeof(dir_ent_t));
-
   for (int i = 0; i < theNumberOfParentEntries; ++i) {
     dir_ent_t theEntryToCheck = theParentEntries[i];
     string theEntryName(theEntryToCheck.name);
 
     if (theEntryName == name) {
       // Check to see if the type matches
-      inode_t inode;
-      this->stat(theEntryToCheck.inum, &inode);
+      inode_t theInodeToCheck = theInodes[theEntryToCheck.inum];
 
-      if (inode.type == type) {
+      if (theInodeToCheck.type == type) {
         return 0;
       }
       else {
@@ -154,24 +166,20 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
       }
     }
   }
+  #pragma endregion
 
-  // Find the first inode bit that is available
-  const int LEN_INODE_BITMAP_ARR = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
-  unsigned char theInodeBitmap[LEN_INODE_BITMAP_ARR];
-  this->readInodeBitmap(&super_block, theInodeBitmap);
-
-  int theAvailableInodeBit = getFirstAvailableBit(theInodeBitmap, LEN_INODE_BITMAP_ARR);
-
-  if (theAvailableInodeBit < 0) {
+  // Find the first inode bit that is available, and mark it in bitmap
+  int theAvailableInodeNumber = getFirstAvailableBit(theInodeBitmap, theLenOfInodeBitmapArr);
+  #pragma region
+  if (theAvailableInodeNumber < 0)
     return -ENOTENOUGHSPACE;
-  }
 
-  // Now create a new inode and update the bitmap
-  const int theInodeBlockNumber = super_block.inode_region_addr + theAvailableInodeBit / THE_INODES_PER_BLOCK_CONSTANT;
-  inode_t theInodeBlock[THE_INODES_PER_BLOCK_CONSTANT];
-  this->disk->readBlock(theInodeBlockNumber, theInodeBlock);
+  setBit(theInodeBitmap, theAvailableInodeNumber);
+  #pragma endregion
 
-  theInodeBlock[theAvailableInodeBit].type = type;
+  // Now create a new inode for the contents of this entry
+  #pragma region
+  theInodes[theAvailableInodeNumber].type = type;
 
   if (type == UFS_DIRECTORY) {
     // This is a directory
@@ -179,27 +187,24 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     // One for "." pointing to this path
     // The other one ".." pointing to parent
     // TODO ??
-    theInodeBlock[theAvailableInodeBit].size = 2 * sizeof(dir_ent_t);
+    // Need to create another new inode
+
+    theInodes[theAvailableInodeNumber].size = 2 * sizeof(dir_ent_t);
   }
   else {
     // This is a file, it's empty
-    theInodeBlock[theAvailableInodeBit].size = 0;
+    theInodes[theAvailableInodeNumber].size = 0;
   }
-
-  setBit(theInodeBitmap, theAvailableInodeBit);
+  #pragma endregion
 
   // Now we need to add an entry
   int theEntriesBlockNumber = -1;
   dir_ent_t theEntriesBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
-  
-  bool isNewBlock = false;
-  const int LEN_DATA_BITMAP_ARRAY_CONSTANT = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
-  unsigned char theDataBitmap[LEN_DATA_BITMAP_ARRAY_CONSTANT];
-
+  #pragma region
   // Check if we need to create a new block
   if (parentInode.size % UFS_BLOCK_SIZE == 0) {
     // Need to create a new data block
-    theEntriesBlock[0].inum = theAvailableInodeBit;
+    theEntriesBlock[0].inum = theAvailableInodeNumber;
     strcpy(theEntriesBlock[0].name, name.c_str());
 
     for (int i = 1; i < THE_ENTRIES_PER_BLOCK_CONSTANT; ++i) {
@@ -207,18 +212,19 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     }
 
     // Read bitmap to find the first available data block to write to
-    this->readDataBitmap(&super_block, theDataBitmap);
-
-    int theFirstAvailableBitInDataBlock = getFirstAvailableBit(theDataBitmap, LEN_DATA_BITMAP_ARRAY_CONSTANT);
-    if (theFirstAvailableBitInDataBlock == -1) {
+    theEntriesBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    if (theEntriesBlockNumber == -1) {
       return -ENOTENOUGHSPACE;
     }
 
-    theEntriesBlockNumber = theFirstAvailableBitInDataBlock;
-    isNewBlock = true;
+    // Add the new block to our parent
+    int theIdxToAppendToParentInodeDirect = parentInode.size / UFS_BLOCK_SIZE;
+    parentInode.direct[theIdxToAppendToParentInodeDirect] = theEntriesBlockNumber;
   }
   else {
     // Can just append to the data in the last block
+    // TODO ??
+    /*
     int theDirectSize = parentInode.size / sizeof(dir_ent_t);
     int theLastBlockIdx = theDirectSize - 1;
     theEntriesBlockNumber = parentInode.direct[theLastBlockIdx];
@@ -228,22 +234,26 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
 
     // Now add it to the end of all the previous entries
     int theIdxToAddToInEntriesBlock = parentInode.size % UFS_BLOCK_SIZE;
-    theEntriesBlock[theIdxToAddToInEntriesBlock].inum = theAvailableInodeBit;
-    strcpy(theEntriesBlock[theIdxToAddToInEntriesBlock].name, name.c_str());
+    theEntriesBlock[theIdxToAddToInEntriesBlock].inum = theAvailableInodeNumber;
+    strcpy(theEntriesBlock[theIdxToAddToInEntriesBlock].name, name.c_str());*/
   }
 
   // Update the size of the parentInode
   parentInode.size += sizeof(dir_ent_t);
+  #pragma endregion
 
-  // Now we need to write the changes to the disk (inode bitmap, inode block, and data block)
+  // Now we need to write the changes to the disk (inode bitmap, data bitmap, inode region, any data blocks)
+  #pragma region
   this->disk->beginTransaction();
+  
   this->writeInodeBitmap(&super_block, theInodeBitmap);
-  if (isNewBlock) {
-    this->writeDataBitmap(&super_block, theDataBitmap);
-  }
+  this->writeDataBitmap(&super_block, theDataBitmap);
+  this->writeInodeRegion(&super_block, theInodes);
+
   this->disk->writeBlock(theEntriesBlockNumber, theEntriesBlock);
-  this->disk->writeBlock(theInodeBlockNumber, theInodeBlock);
+  
   this->disk->commit();
+  #pragma endregion
 
   return 0;
 }
@@ -319,9 +329,7 @@ bool LocalFileSystem::diskHasSpace(super_t *super, int numInodesNeeded, int numD
   return numberOfAvailableDataBlocks >= numDataBlocksNeeded + ceilDiv(numDataBytesNeeded, UFS_BLOCK_SIZE);
 }
 
-void LocalFileSystem::readInodeBitmap(super_t *super, unsigned char *inodeBitmap) {  
-  int theTotalSizeOfBitmap = super->inode_bitmap_len * UFS_BLOCK_SIZE;
-  
+void LocalFileSystem::readInodeBitmap(super_t *super, unsigned char *inodeBitmap) {    
   for (int i = 0; i < super->inode_bitmap_len; ++i) {
     int theBlockToRead = super->inode_bitmap_addr + i;
     auto theBufferStart = inodeBitmap + i * UFS_BLOCK_SIZE;
@@ -329,9 +337,7 @@ void LocalFileSystem::readInodeBitmap(super_t *super, unsigned char *inodeBitmap
   }
 }
 
-void LocalFileSystem::writeInodeBitmap(super_t *super, unsigned char *inodeBitmap) {
-  int theTotalSizeOfBitmap = super->inode_bitmap_len * UFS_BLOCK_SIZE;
-  
+void LocalFileSystem::writeInodeBitmap(super_t *super, unsigned char *inodeBitmap) {  
   for (int i = 0; i < super->inode_bitmap_len; ++i) {
     int theBlockToRead = super->inode_bitmap_addr + i;
     auto theBufferStart = inodeBitmap + i * UFS_BLOCK_SIZE;
@@ -340,8 +346,6 @@ void LocalFileSystem::writeInodeBitmap(super_t *super, unsigned char *inodeBitma
 }
 
 void LocalFileSystem::readDataBitmap(super_t *super, unsigned char *dataBitmap) {
-  int theTotalSizeOfBitmap = super->data_bitmap_len * UFS_BLOCK_SIZE;
-
   for (int i = 0; i < super->inode_bitmap_len; ++i) {
     int theBlockToRead = super->data_bitmap_addr + i;
     auto theBufferStart = dataBitmap + i * UFS_BLOCK_SIZE;
@@ -350,8 +354,6 @@ void LocalFileSystem::readDataBitmap(super_t *super, unsigned char *dataBitmap) 
 }
 
 void LocalFileSystem::writeDataBitmap(super_t *super, unsigned char *dataBitmap) {
-  int theTotalSizeOfBitmap = super->data_bitmap_len * UFS_BLOCK_SIZE;
-
   for (int i = 0; i < super->inode_bitmap_len; ++i) {
     int theBlockToRead = super->data_bitmap_addr + i;
     auto theBufferStart = dataBitmap + i * UFS_BLOCK_SIZE;
@@ -360,8 +362,6 @@ void LocalFileSystem::writeDataBitmap(super_t *super, unsigned char *dataBitmap)
 }
 
 void LocalFileSystem::readInodeRegion(super_t *super, inode_t *inodes) {
-  int theTotalSizeOfBitmap = super->inode_region_len * UFS_BLOCK_SIZE;
-
   for (int i = 0; i < super->inode_region_len; ++i) {
     int theBlockToRead = super->inode_region_addr + i;
     auto theBufferStart = inodes + i * UFS_BLOCK_SIZE;
@@ -370,8 +370,6 @@ void LocalFileSystem::readInodeRegion(super_t *super, inode_t *inodes) {
 }
 
 void LocalFileSystem::writeInodeRegion(super_t *super, inode_t *inodes) {
-  int theTotalSizeOfBitmap = super->inode_region_len * UFS_BLOCK_SIZE;
-
   for (int i = 0; i < super->inode_region_len; ++i) {
     int theBlockToRead = super->inode_region_addr + i;
     auto theBufferStart = inodes + i * UFS_BLOCK_SIZE;
@@ -435,8 +433,4 @@ inline bool isValidInodeNumber(super_t & super, int num) {
 inline bool isValidName(string & name) {
   // Need one more char for null terminating
   return name.size() < DIR_ENT_NAME_SIZE && name != ".." && name != ".";
-}
-
-int checkIfNameExists() {
-  // ??
 }
