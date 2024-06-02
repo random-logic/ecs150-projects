@@ -15,4 +15,10 @@ int main(int argc, char *argv[]) {
     cout << argv[0] << ": diskImageFile" << endl;
     return 1;
   }
+
+  string theNameOfTheDiskImage(argv[1]);
+  Disk theDisk(theNameOfTheDiskImage, UFS_BLOCK_SIZE);
+  LocalFileSystem theLocalFileSystem(&theDisk);
+
+  
 }

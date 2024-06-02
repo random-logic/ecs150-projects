@@ -15,6 +15,9 @@
 
 using namespace std;
 
+bool parsePath(const string & theUrl, istringstream & thePaths);
+bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & thePaths, LocalFileSystem * theLocalFileSystem);
+
 DistributedFileSystemService::DistributedFileSystemService(string diskFile) : HttpService("/ds3/") {
   this->fileSystem = new LocalFileSystem(new Disk(diskFile, UFS_BLOCK_SIZE));
 }  
@@ -23,12 +26,12 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
-  #pragma region
+  /* #region */
   if (!parsePath(theUrl, thePaths)) {
     response->setBody("");
     return;
   }
-  #pragma endregion
+  /* #endregion */
 
   // Get the super block
   super_t theSuperBlock;
@@ -49,7 +52,7 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   this->fileSystem->stat(theInodeNumber, &theInode);
   const int theNumberOfBytesInFile = theInode.size;
   char theFileBuffer[theNumberOfBytesInFile + 1];
-  #pragma region
+  /* #region */
   if (this->fileSystem->read(theInodeNumber, theFileBuffer, theNumberOfBytesInFile)) {
     // TODO: Handle error that happened during the read ??
     response->setBody("");
@@ -57,7 +60,7 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   }
 
   theFileBuffer[theNumberOfBytesInFile] = '\0'; // Ensure null termination
-  #pragma endregion
+  /* #endregion */
 
   response->setBody(string(theFileBuffer));
 }
@@ -66,12 +69,12 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
-  #pragma region
+  /* #region */
   if (!parsePath(theUrl, thePaths)) {
     response->setBody("");
     return;
   }
-  #pragma endregion
+  /* #endregion */
   
   // Get to the right path
 
@@ -86,12 +89,12 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
-  #pragma region
+  /* #region */
   if (!parsePath(theUrl, thePaths)) {
     response->setBody("");
     return;
   }
-  #pragma endregion
+  /* #endregion */
   
   // Get the super block
   super_t theSuperBlock;
@@ -101,7 +104,7 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
   int theParentInodeNumber = -1;
   int theInodeNumber = theSuperBlock.inode_region_addr;
   string theEntryName, buffer;
-  #pragma region
+  /* #region */
   while (getline(thePaths, buffer, '/')) {
     // Set the proper variables
     theEntryName = buffer;
@@ -139,10 +142,10 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
       return;
     }
   }
-  #pragma endregion
+  /* #endregion */
 
   // Now delete the file or directory
-  #pragma region
+  /* #region */
   // It's an error if there is no parent directory to delete from
   if (theParentInodeNumber == -1) {
     // TODO: Get error ??
@@ -153,7 +156,7 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
     // TODO Set the error that is thrown from unlink ??
     return;
   }
-  #pragma endregion
+  /* #endregion */
 
   response->setBody("");
 }
@@ -161,13 +164,13 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
 bool parsePath(const string & theUrl, istringstream & thePaths) {
   const string root = "ds3/";
   const int theStartingIndexOfRoot = theUrl.find(root);
-  istringstream thePaths;
-  if (theStartingIndexOfRoot == string::npos) {
+  if (theStartingIndexOfRoot == static_cast<const int>(string::npos)) {
     return false;
   }
   else {
     string allPaths = theUrl.substr(theStartingIndexOfRoot + root.size());
     thePaths = istringstream(allPaths);
+    return true;
   }
 }
 
