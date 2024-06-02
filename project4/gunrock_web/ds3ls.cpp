@@ -9,8 +9,8 @@
 
 using namespace std;
 
-bool cmp(dir_ent_t * a, dir_ent_t * b) {
-  return strcmp(a->name, b->name);
+bool cmp(const dir_ent_t & a, const dir_ent_t & b) {
+  return strcmp(a.name, b.name);
 }
 
 void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSystem &theLocalFileSystem, string name = "/") {
