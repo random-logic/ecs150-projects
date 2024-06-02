@@ -185,7 +185,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   #pragma endregion
 
   // Find the first inode bit that is available, and mark it in bitmap
-  int theAvailableInodeNumber = getFirstAvailableBit(theInodeBitmap, theLenOfInodeBitmapArr);
+  const int theAvailableInodeNumber = getFirstAvailableBit(theInodeBitmap, theLenOfInodeBitmapArr);
   #pragma region
   if (theAvailableInodeNumber < 0)
     return -ENOTENOUGHSPACE;
@@ -284,7 +284,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   this->disk->commit();
   #pragma endregion
 
-  return 0;
+  return theAvailableInodeNumber;
 }
 
 int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
@@ -411,8 +411,9 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
         if (theEntryInode.size == sizeof(dir_ent_t) * 2) {
           // Then only .. and . are present
           
-          // First we need to delete the corresponding data blocks that store .. and .
-          // TODO ??
+          // First we need to delete the corresponding data block that store .. and .
+          int theBlockNumberToDelete = theEntryInode.direct[0];
+          // ?? TODO - make it so we can write to a block region without using begin transaction so we can do begin transaction in here instead
 
           // Set the directory entry for removal
           idxToRemove = i;
