@@ -26,7 +26,7 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
   sort(theEntries, theEntries + theNumberOfEntries, cmp);
 
   for (dir_ent_t entry : theEntries) {
-    cout << entry.name << endl;
+    cout << entry.inum << "\t" << entry.name << endl;
   }
 
   for (dir_ent_t entry : theEntries) {
