@@ -316,6 +316,11 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   dir_ent_t theEntries[theNumberOfEntries];
   this->read(parentInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
 
+  // Get the data bitmap
+  const int theSizeOfDataBitmapArr = super_block.data_bitmap_len;
+  unsigned char theDataBitmap[theSizeOfDataBitmapArr];
+  this->readDataBitmap(&super_block, theDataBitmap);
+
   // Find the corresponding block to remove
   int idxToRemove = -1;
   #pragma region
@@ -332,7 +337,7 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
           
           // First we need to delete the corresponding data block that store .. and .
           int theBlockNumberToDelete = theEntryInode.direct[0];
-          // ?? TODO - make it so we can write to a block region without using begin transaction so we can do begin transaction in here instead
+          clearBit(theDataBitmap, theBlockNumberToDelete);
 
           // Set the directory entry for removal
           idxToRemove = i;
@@ -368,6 +373,7 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
 
   // Now write the changes
   this->disk->beginTransaction();
+  this->writeDataBitmap(&super_block, theDataBitmap);
   doWrite(parentInodeNumber, theEntriesAfterRemoval, theNumberOfEntries - 1, this, false);
   this->disk->commit();
 
@@ -506,6 +512,7 @@ inline bool unlinkAllowed(string & name) {
   return name != "." && name != "..";
 }
 
+// NOTE - this should always be called last, or it's an error
 int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs, bool doBeginTransaction = true) {
   super_t super_block;
   fs->readSuperBlock(&super_block);
@@ -587,8 +594,7 @@ int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs,
     fs->disk->writeBlock(theBlockNumber, const_cast<void*>(buffer) + theBufferOffset);
   }
 
-  if (doBeginTransaction)
-    fs->disk->commit();
+  fs->disk->commit();
   #pragma endregion
 
   return size;
