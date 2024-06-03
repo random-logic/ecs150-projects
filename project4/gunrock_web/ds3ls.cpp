@@ -11,10 +11,10 @@
 
 using namespace std;
 
-const int THE_ROOT_INODE_NUMBER_CONSTANT = 3;
+const int THE_ROOT_INODE_NUMBER_CONSTANT = 0;
 
 bool cmp(const dir_ent_t & a, const dir_ent_t & b) {
-  return strcmp(a.name, b.name);
+  return strcmp(a.name, b.name) < 0;
 }
 
 void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSystem &theLocalFileSystem, string name = "/") {
@@ -23,21 +23,17 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
   inode_t theInode;
 
   if (theLocalFileSystem.stat(theInodeNumberToRead, &theInode))
-    cout << "err" << endl;
+    cout << "stat err" << endl;
   
-  cout << theInode.type << endl;
-  cout << theInode.size / UFS_BLOCK_SIZE << endl;
+  vector<dir_ent_t> theEntries(MAX_FILE_SIZE / sizeof(dir_ent_t));
+  const int theNumberOfBytesRead = theLocalFileSystem.read(theInodeNumberToRead, theEntries.data(), MAX_FILE_SIZE);
 
-  for (int inodeNumber : theInode.direct) {
-    cout << inodeNumber << " ";
-  }
+  if (theNumberOfBytesRead < 0)
+    cout << "read err" << endl;
 
-  cout << endl;
-  return;
-  
-  const int theNumberOfEntries = theInode.size / sizeof(dir_ent_t);
-  vector<dir_ent_t> theEntries(theNumberOfEntries);
-  theLocalFileSystem.read(theInodeNumberToRead, theEntries.data(), MAX_FILE_SIZE);
+  int theActualNumberOfEntries = theNumberOfBytesRead / (int)sizeof(dir_ent_t);
+
+  theEntries.resize(theActualNumberOfEntries);
 
   sort(theEntries.begin(), theEntries.end(), cmp);
 
@@ -50,9 +46,16 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
     if (theNameOfEntry == ".." || theNameOfEntry == ".")
       continue;
 
+    inode_t theNextInode;
+    theLocalFileSystem.stat(entry.inum, &theNextInode);
+
+    if (theNextInode.type != UFS_DIRECTORY)
+      continue;
+
     if (name != "/")
       name.push_back('/');
     theNameOfEntry = name + theNameOfEntry;
+
     printContentsOfAllDirectories(entry.inum, theLocalFileSystem, theNameOfEntry);
   }
 }

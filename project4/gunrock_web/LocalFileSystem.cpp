@@ -82,8 +82,10 @@ int countBlocks(inode_t & theInode) {
   if (theInode.type == UFS_DIRECTORY) {
     int count = 0;
     for (int i = 0; i < DIRECT_PTRS; ++i) {
-      if (theInode.direct[i] != -1)
+      if ((int)theInode.direct[i] != -1)
         ++count;
+      else
+        break;
     }
 
     return count;
@@ -94,7 +96,7 @@ int countBlocks(inode_t & theInode) {
 }
 
 // NOTE - this should always be called last, or it's an error
-int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs, bool doBeginTransaction = true) {
+int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs, bool checkForFile = true, bool doBeginTransaction = true) {
   super_t super_block;
   fs->readSuperBlock(&super_block);
 
@@ -112,7 +114,7 @@ int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs,
   /* #region */
   fs->stat(inodeNumber, &theInode);
 
-  if (theInode.type != UFS_REGULAR_FILE)
+  if (checkForFile && theInode.type != UFS_REGULAR_FILE)
     return -EINVALIDTYPE;
   /* #endregion */
 
@@ -260,57 +262,49 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   /* #region */
   this->stat(inodeNumber, &theInode);
 
-  if (theInode.type != UFS_REGULAR_FILE)
+  if (theInode.type != UFS_REGULAR_FILE && theInode.type != UFS_DIRECTORY)
     return -EINVALIDTYPE;
   /* #endregion */
 
   // Do actual read
+  const bool isDirectory = theInode.type == UFS_DIRECTORY;
+  const int theNumberOfBlocksToRead = countBlocks(theInode);
+  const int theInodeContentSize = isDirectory ? theNumberOfBlocksToRead * UFS_BLOCK_SIZE : theInode.size;
+  const int theActualSize = min(size, theInodeContentSize);
+  int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
   /* #region */
-  if (theInode.type == UFS_DIRECTORY) {
-    // Read from directory
-    int theSizeOnTheLastBlock = size % UFS_BLOCK_SIZE;
-    int theNumberOfBlocksToRead = countBlocks(theInode);
-    
-    for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
-      int theBlockToRead = theInode.direct[i];
-    
-      unsigned char theTempBuffer[UFS_BLOCK_SIZE];
+  if (theSizeOnTheLastBlock == 0)
+    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
 
-      disk->readBlock(theBlockToRead, theTempBuffer);
+  // Read everything the inode points to
+  for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
+    int theBlockToRead = theInode.direct[i];
+  
+    unsigned char theTempBuffer[UFS_BLOCK_SIZE];
 
-      int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
-      bool isLastBlock = i == theNumberOfBlocksToRead - 1;
-      int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
-      memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
-    }
+    disk->readBlock(theBlockToRead, theTempBuffer);
 
-    return theNumberOfBlocksToRead * UFS_BLOCK_SIZE;
+    int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
+    bool isLastBlock = i == theNumberOfBlocksToRead - 1;
+    int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+    memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
   }
-  else { // if theInode.type == UFS_REGULAR_FILE
-    // Read from file
-    // Get the sizes
-    int theActualSize = min(size, theInode.size);
-    int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
-    int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
-    if (theSizeOnTheLastBlock == 0)
-      theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+  /* #endregion */
 
-    // Read everything the inode points to
-    for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
-      int theBlockToRead = theInode.direct[i];
-    
-      unsigned char theTempBuffer[UFS_BLOCK_SIZE];
-
-      disk->readBlock(theBlockToRead, theTempBuffer);
-
-      int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
-      bool isLastBlock = i == theNumberOfBlocksToRead - 1;
-      int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
-      memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
+  // We have to double check that all entries are valid if we are reading a directory
+  /* #region */
+  if (isDirectory) {
+    int theNumberOfEntries = 0;
+    for (int offset = 0; offset < theActualSize / (int)sizeof(dir_ent_t); ++offset) {
+      if (((dir_ent_t*)buffer + offset)->inum == -1)
+        break;
+      ++theNumberOfEntries;
     }
 
+    return theNumberOfEntries * sizeof(dir_ent_t);
+  } 
+  else
     return theActualSize;
-  }
   /* #endregion */
 }
 
@@ -573,7 +567,7 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   // Now write the changes
   this->disk->beginTransaction();
   this->writeDataBitmap(&super_block, theDataBitmap);
-  doWrite(parentInodeNumber, theEntriesAfterRemoval, theNumberOfEntries - 1, this, false);
+  doWrite(parentInodeNumber, theEntriesAfterRemoval, theNumberOfEntries - 1, this, false, false);
   this->disk->commit();
 
   return 0;
