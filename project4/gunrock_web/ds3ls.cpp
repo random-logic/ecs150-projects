@@ -7,7 +7,11 @@
 #include "Disk.h"
 #include "ufs.h"
 
+#include <vector>
+
 using namespace std;
+
+const int THE_ROOT_INODE_NUMBER_CONSTANT = 3;
 
 bool cmp(const dir_ent_t & a, const dir_ent_t & b) {
   return strcmp(a.name, b.name);
@@ -17,23 +21,38 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
   cout << "Directory " << name << endl;
   
   inode_t theInode;
-  theLocalFileSystem.stat(theInodeNumberToRead, &theInode);
+
+  if (theLocalFileSystem.stat(theInodeNumberToRead, &theInode))
+    cout << "err" << endl;
+  
+  cout << theInode.type << endl;
+  cout << theInode.size / UFS_BLOCK_SIZE << endl;
+
+  for (int inodeNumber : theInode.direct) {
+    cout << inodeNumber << " ";
+  }
+
+  cout << endl;
+  return;
   
   const int theNumberOfEntries = theInode.size / sizeof(dir_ent_t);
-  dir_ent_t theEntries[theNumberOfEntries];
-  theLocalFileSystem.read(theInodeNumberToRead, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
+  vector<dir_ent_t> theEntries(theNumberOfEntries);
+  theLocalFileSystem.read(theInodeNumberToRead, theEntries.data(), MAX_FILE_SIZE);
 
-  sort(theEntries, theEntries + theNumberOfEntries, cmp);
+  sort(theEntries.begin(), theEntries.end(), cmp);
 
-  for (dir_ent_t entry : theEntries) {
+  for (const dir_ent_t & entry : theEntries) {
     cout << entry.inum << "\t" << entry.name << endl;
   }
 
-  for (dir_ent_t entry : theEntries) {
+  for (const dir_ent_t & entry : theEntries) {
     string theNameOfEntry(entry.name);
     if (theNameOfEntry == ".." || theNameOfEntry == ".")
       continue;
 
+    if (name != "/")
+      name.push_back('/');
+    theNameOfEntry = name + theNameOfEntry;
     printContentsOfAllDirectories(entry.inum, theLocalFileSystem, theNameOfEntry);
   }
 }
@@ -51,5 +70,5 @@ int main(int argc, char *argv[]) {
   super_t theSuperBlock;
   theLocalFileSystem.readSuperBlock(&theSuperBlock);
 
-  printContentsOfAllDirectories(theSuperBlock.data_region_addr, theLocalFileSystem);
+  printContentsOfAllDirectories(THE_ROOT_INODE_NUMBER_CONSTANT, theLocalFileSystem);
 }

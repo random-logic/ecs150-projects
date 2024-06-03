@@ -15,9 +15,8 @@ using namespace std;
 const int THE_INODES_PER_BLOCK_CONSTANT = UFS_BLOCK_SIZE / sizeof(inode_t);
 const int THE_ENTRIES_PER_BLOCK_CONSTANT = UFS_BLOCK_SIZE / sizeof(dir_ent_t);
 
-// Helper functions
-/* #region */
-bool getBit(unsigned char * bitmap, int bit) {
+/* #region Helper functions */
+bool getBit(const unsigned char * bitmap, int bit) {
   int theIdxToCheck = bit / 8;
   int theBitOffset = bit % 8;
   unsigned char byte = bitmap[theIdxToCheck];
@@ -41,7 +40,7 @@ void clearBit(unsigned char * bitmap, int bit) {
   bitmap[theIdxToCheck] = byte | ~(1 << theBitOffset);
 }
 
-int countNumberOfAvailableBits(unsigned char * bitmap, int size) {
+int countNumberOfAvailableBits(const unsigned char * bitmap, int size) {
   int theNumberOfAvailableBits = 0;
   
   for (int i = 0; i < size; ++i)
@@ -51,7 +50,7 @@ int countNumberOfAvailableBits(unsigned char * bitmap, int size) {
   return theNumberOfAvailableBits;
 }
 
-int ceilDiv(int num, int den) {
+int ceilDiv(const int num, const int den) {
   return (num + den - 1) / den;
 }
 
@@ -66,17 +65,32 @@ int getFirstAvailableBit(unsigned char * bitmap, int len) {
   return -1;
 }
 
-inline bool isValidInodeNumber(super_t & super, int num) {
-  return num < 0 || num >= super.num_inodes;
+inline bool isValidInodeNumber(const super_t & super, const int num) {
+  return num >= 0 || num < super.num_inodes;
 }
 
-inline bool isValidName(string & name) {
+inline bool isValidName(const string name) {
   // Need one more char for null terminating
   return name.size() < DIR_ENT_NAME_SIZE;
 }
 
-inline bool unlinkAllowed(string & name) {
+inline bool unlinkAllowed(const string name) {
   return name != "." && name != "..";
+}
+
+int countBlocks(inode_t & theInode) {
+  if (theInode.type == UFS_DIRECTORY) {
+    int count = 0;
+    for (int i = 0; i < DIRECT_PTRS; ++i) {
+      if (theInode.direct[i] != -1)
+        ++count;
+    }
+
+    return count;
+  }
+  else { // type is UFS_REGULAR_FILE
+    return ceilDiv(theInode.size, UFS_BLOCK_SIZE);
+  }
 }
 
 // NOTE - this should always be called last, or it's an error
@@ -109,7 +123,7 @@ int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs,
 
   // See if we need to allocate or deallocate blocks
   // After this, we will have exactly the number of blocks needed in our inode
-  int theNumberOfBlocksPresent = ceilDiv(theInode.size, UFS_BLOCK_SIZE);
+  int theNumberOfBlocksPresent = countBlocks(theInode);
   int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
   int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
   int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
@@ -171,10 +185,9 @@ int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs,
   return size;
 }
 
-/* #endregion */
+/* #endregion Helper functions */
 
-// Class functions
-/* #region */
+/* #region Class functions */
 LocalFileSystem::LocalFileSystem(Disk *disk) {
   this->disk = disk;
 }
@@ -251,28 +264,54 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
     return -EINVALIDTYPE;
   /* #endregion */
 
-  // Get the sizes
-  int theActualSize = min(size, theInode.size);
-  int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
-  int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
-  if (theSizeOnTheLastBlock == 0)
-    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+  // Do actual read
+  /* #region */
+  if (theInode.type == UFS_DIRECTORY) {
+    // Read from directory
+    int theSizeOnTheLastBlock = size % UFS_BLOCK_SIZE;
+    int theNumberOfBlocksToRead = countBlocks(theInode);
+    
+    for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
+      int theBlockToRead = theInode.direct[i];
+    
+      unsigned char theTempBuffer[UFS_BLOCK_SIZE];
 
-  // Read everything the inode points to
-  for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
-    int theBlockToRead = theInode.direct[i];
-  
-    unsigned char theTempBuffer[UFS_BLOCK_SIZE];
+      disk->readBlock(theBlockToRead, theTempBuffer);
 
-    disk->readBlock(theBlockToRead, theTempBuffer);
+      int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
+      bool isLastBlock = i == theNumberOfBlocksToRead - 1;
+      int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+      memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
+    }
 
-    int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
-    bool isLastBlock = i == theNumberOfBlocksToRead - 1;
-    int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
-    memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
+    return theNumberOfBlocksToRead * UFS_BLOCK_SIZE;
   }
+  else { // if theInode.type == UFS_REGULAR_FILE
+    // Read from file
+    // Get the sizes
+    int theActualSize = min(size, theInode.size);
+    int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
+    int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
+    if (theSizeOnTheLastBlock == 0)
+      theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
 
-  return 0;
+    // Read everything the inode points to
+    for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
+      int theBlockToRead = theInode.direct[i];
+    
+      unsigned char theTempBuffer[UFS_BLOCK_SIZE];
+
+      disk->readBlock(theBlockToRead, theTempBuffer);
+
+      int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
+      bool isLastBlock = i == theNumberOfBlocksToRead - 1;
+      int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+      memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
+    }
+
+    return theActualSize;
+  }
+  /* #endregion */
 }
 
 int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
@@ -610,4 +649,4 @@ void LocalFileSystem::writeInodeRegion(super_t *super, inode_t *inodes) {
   }
 }
 
-/* #endregion */
+/* #endregion Class functions */
