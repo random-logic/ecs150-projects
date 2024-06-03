@@ -267,45 +267,56 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   /* #endregion */
 
   // Do actual read
-  const bool isDirectory = theInode.type == UFS_DIRECTORY;
-  const int theNumberOfBlocksToRead = countBlocks(theInode);
-  const int theInodeContentSize = isDirectory ? theNumberOfBlocksToRead * UFS_BLOCK_SIZE : theInode.size;
-  const int theActualSize = min(size, theInodeContentSize);
-  int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
-  /* #region */
-  if (theSizeOnTheLastBlock == 0)
-    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+  if (theInode.type == UFS_DIRECTORY) {
+    // This is a directory
+    int theActualNumberOfBytesRead = 0;
 
-  // Read everything the inode points to
-  for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
-    int theBlockToRead = theInode.direct[i];
-  
-    unsigned char theTempBuffer[UFS_BLOCK_SIZE];
+    for (int i = 0; i < DIRECT_PTRS; ++i) {
+      int theBlockToRead = theInode.direct[i];
+      int theBufferSize = UFS_BLOCK_SIZE / sizeof(dir_ent_t);
+      dir_ent_t theTempBuffer[UFS_BLOCK_SIZE / sizeof(dir_ent_t)];
+      disk->readBlock(theBlockToRead, theTempBuffer);
 
-    disk->readBlock(theBlockToRead, theTempBuffer);
+      bool doTerminate = false;
+      for (int j = 0; j < theBufferSize; ++j) {
+        if (theTempBuffer[j].inum == -1) {
+          doTerminate = true;
+          break;
+        }
 
-    int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
-    bool isLastBlock = i == theNumberOfBlocksToRead - 1;
-    int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
-    memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
-  }
-  /* #endregion */
+        const int bufferOffset = UFS_BLOCK_SIZE * i + sizeof(dir_ent_t) * j;
+        memcpy((unsigned char*)buffer + bufferOffset, theTempBuffer + j, sizeof(dir_ent_t));
+        theActualNumberOfBytesRead += sizeof(dir_ent_t);
+      }
 
-  // We have to double check that all entries are valid if we are reading a directory
-  /* #region */
-  if (isDirectory) {
-    int theNumberOfEntries = 0;
-    for (int offset = 0; offset < theActualSize / (int)sizeof(dir_ent_t); ++offset) {
-      if (((dir_ent_t*)buffer + offset)->inum == -1)
+      if (doTerminate) {
         break;
-      ++theNumberOfEntries;
+      }
     }
 
-    return theNumberOfEntries * sizeof(dir_ent_t);
-  } 
-  else
+    return theActualNumberOfBytesRead;
+  }
+  else {
+    // This is a file
+    const int theActualSize = min(size, theInode.size);
+    const int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
+    int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
+    if (theSizeOnTheLastBlock == 0)
+      theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+
+    for (int i = 0; i < theNumberOfBlocksToRead; ++i) {
+      int theBlockToRead = theInode.direct[i];
+      unsigned char theTempBuffer[UFS_BLOCK_SIZE];
+      disk->readBlock(theBlockToRead, theTempBuffer);
+
+      int theOffsetInTheBuffer = i * UFS_BLOCK_SIZE;
+      bool isLastBlock = i == theNumberOfBlocksToRead - 1;
+      int theAmountToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+      memcpy((unsigned char*)buffer + theOffsetInTheBuffer, theTempBuffer, theAmountToCopy);
+    }
+
     return theActualSize;
-  /* #endregion */
+  }
 }
 
 int LocalFileSystem::create(int parentInodeNumber, int type, string name) {

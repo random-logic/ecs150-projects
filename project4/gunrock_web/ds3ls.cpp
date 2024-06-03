@@ -26,7 +26,7 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
     cout << "stat err" << endl;
   
   vector<dir_ent_t> theEntries(MAX_FILE_SIZE / sizeof(dir_ent_t));
-  const int theNumberOfBytesRead = theLocalFileSystem.read(theInodeNumberToRead, theEntries.data(), MAX_FILE_SIZE);
+  const int theNumberOfBytesRead = theLocalFileSystem.read(theInodeNumberToRead, theEntries.data(), UFS_BLOCK_SIZE);
 
   if (theNumberOfBytesRead < 0)
     cout << "read err" << endl;
