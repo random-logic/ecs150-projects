@@ -16,7 +16,7 @@ const int THE_INODES_PER_BLOCK_CONSTANT = UFS_BLOCK_SIZE / sizeof(inode_t);
 const int THE_ENTRIES_PER_BLOCK_CONSTANT = UFS_BLOCK_SIZE / sizeof(dir_ent_t);
 
 /* #region Helper functions */
-bool getBit(const unsigned char * bitmap, int bit) {
+bool getBit(const unsigned char * bitmap, const int bit) {
   int theIdxToCheck = bit / 8;
   int theBitOffset = bit % 8;
   unsigned char byte = bitmap[theIdxToCheck];
@@ -24,7 +24,7 @@ bool getBit(const unsigned char * bitmap, int bit) {
   return byte & (1 << theBitOffset);
 }
 
-void setBit(unsigned char * bitmap, int bit) {
+void setBit(unsigned char * bitmap, const int bit) {
   int theIdxToCheck = bit / 8;
   int theBitOffset = bit % 8;
   unsigned char byte = bitmap[theIdxToCheck];
@@ -32,7 +32,7 @@ void setBit(unsigned char * bitmap, int bit) {
   bitmap[theIdxToCheck] = byte | (1 << theBitOffset);
 }
 
-void clearBit(unsigned char * bitmap, int bit) {
+void clearBit(unsigned char * bitmap, const int bit) {
   int theIdxToCheck = bit / 8;
   int theBitOffset = bit % 8;
   unsigned char byte = bitmap[theIdxToCheck];
@@ -40,7 +40,7 @@ void clearBit(unsigned char * bitmap, int bit) {
   bitmap[theIdxToCheck] = byte | ~(1 << theBitOffset);
 }
 
-int countNumberOfAvailableBits(const unsigned char * bitmap, int size) {
+int countNumberOfAvailableBits(const unsigned char * bitmap, const int size) {
   int theNumberOfAvailableBits = 0;
   
   for (int i = 0; i < size; ++i)
@@ -55,7 +55,7 @@ int ceilDiv(const int num, const int den) {
 }
 
 // Note - len is the length of the array, number of bits is len * 8
-int getFirstAvailableBit(unsigned char * bitmap, int len) {
+int getFirstAvailableBit(const unsigned char * bitmap, const int len) {
   for (int i = 0; i < len * 8; ++i) {
     if (getBit(bitmap, i)) {
       return i;
@@ -66,7 +66,7 @@ int getFirstAvailableBit(unsigned char * bitmap, int len) {
 }
 
 inline bool isValidInodeNumber(const super_t & super, const int num) {
-  return num >= 0 || num < super.num_inodes;
+  return num >= 0 && num < super.num_inodes;
 }
 
 inline bool isValidName(const string name) {
@@ -78,7 +78,7 @@ inline bool unlinkAllowed(const string name) {
   return name != "." && name != "..";
 }
 
-int countBlocks(inode_t & theInode) {
+int countBlocks(const inode_t & theInode) {
   if (theInode.type == UFS_DIRECTORY) {
     int count = 0;
     for (int i = 0; i < DIRECT_PTRS; ++i) {
@@ -214,14 +214,30 @@ int LocalFileSystem::lookup(int parentInodeNumber, string name) {
     return -EINVALIDINODE;
 
   // Get all the entries
-  int theNumberOfEntries = theParentInode.size / sizeof(dir_ent_t);
+  /*int theNumberOfEntries = theParentInode.size / sizeof(dir_ent_t);
   dir_ent_t theEntries[theNumberOfEntries];
   this->read(parentInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
 
   // Search which one matches
   for (dir_ent_t theEntry : theEntries)
     if (string(theEntry.name) == name)
-      return theEntry.inum;
+      return theEntry.inum;*/
+  
+  for (int i = 0; i < DIRECT_PTRS; ++i) {
+    dir_ent_t theEntries[THE_ENTRIES_PER_BLOCK_CONSTANT];
+    int theBlockNumberToRead = theParentInode.direct[i];
+    if (theBlockNumberToRead == -1)
+      return -ENOTFOUND;
+
+    this->disk->readBlock(theParentInode.direct[i], theEntries);
+
+    for (dir_ent_t entry : theEntries) {
+      if (entry.inum == -1)
+        return -ENOTFOUND;
+      if (string(entry.name) == name)
+        return entry.inum;
+    }
+  }
 
   return -ENOTFOUND;
 }
@@ -253,7 +269,7 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   if (!isValidInodeNumber(super_block, inodeNumber))
     return -EINVALIDINODE;
 
-  if (size < 0)
+  if (size < 0 || size > MAX_FILE_SIZE)
     return -EINVALIDSIZE;
   /* #endregion */
 
@@ -343,7 +359,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   this->readInodeBitmap(&super_block, theInodeBitmap);
 
   // Get inode array
-  const int theTotalNumberOfInodes = super_block.inode_region_len * UFS_BLOCK_SIZE / sizeof(inode_t);
+  const int theTotalNumberOfInodes = super_block.num_inodes;
   inode_t theInodes[theTotalNumberOfInodes];
   readInodeRegion(&super_block, theInodes);
 
@@ -492,7 +508,98 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
 }
 
 int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
-  return doWrite(inodeNumber, buffer, size, this);
+  super_t super_block;
+  this->readSuperBlock(&super_block);
+
+  // Check input
+  /* #region */
+  if (!isValidInodeNumber(super_block, inodeNumber))
+    return -EINVALIDINODE;
+
+  if (size < 0 || size > MAX_FILE_SIZE)
+    return -EINVALIDSIZE;
+  /* #endregion */
+
+  // Get the inode region
+  const int theNumberOfInodes = super_block.num_inodes;
+  inode_t theInodeRegion[theNumberOfInodes];
+  this->readInodeRegion(&super_block, theInodeRegion);
+
+  // Stat the inode
+  inode_t theInode = theInodeRegion[inodeNumber];
+  /* #region */
+  if (theInode.type != UFS_REGULAR_FILE)
+    return -EINVALIDTYPE;
+  /* #endregion */
+
+  // Get data bitmap
+  const int theLenOfDataBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
+  unsigned char theDataBitmap[theLenOfDataBitmapArr];
+  this->readDataBitmap(&super_block, theDataBitmap);
+
+  // See if we need to allocate or deallocate blocks
+  // After this, we will have exactly the number of blocks needed in our inode
+  int theNumberOfBlocksPresent = ceilDiv(theInode.size, UFS_BLOCK_SIZE);
+  int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
+  int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
+  int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
+  /* #region */
+  // Check to see if we have enough direct ptrs
+  if (theNumberOfBlocksNeeded > DIRECT_PTRS)
+    return -ENOTENOUGHSPACE;
+
+  // Allocate any blocks
+  for (int i = 0; i < theNumberOfBlocksToAllocate; ++i) {
+    int idx = theNumberOfBlocksPresent + i; // Append at the end
+    
+    // Get the first available data block number, and set that bit
+    int theAvailableBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    if (theAvailableBlockNumber == -1)
+      return -ENOTENOUGHSPACE;
+    setBit(theDataBitmap, theAvailableBlockNumber);
+
+    // Set the available block number in inode
+    theInode.direct[idx] = theAvailableBlockNumber;
+  }
+
+  // Deallocate any extra blocks
+  for (int i = 1; i <= theNumberOfBlocksToDeallocate; ++i) {
+    int idx = theNumberOfBlocksPresent - i; // Start deallocating from the end
+    int theBlockNumberToFree = theInode.direct[idx];
+
+    // Clear the bit to deallocate
+    clearBit(theDataBitmap, theBlockNumberToFree);
+  }
+  /* #endregion */
+
+  // Get the size of the last block
+  const int theSizeOnTheLastBlock = (theInode.size - 1) % UFS_BLOCK_SIZE + 1;
+
+  // Do write
+  /* #region */
+  this->disk->beginTransaction();
+
+  // Write to all the blocks
+  for (int i = 0; i < theNumberOfBlocksNeeded; ++i) {
+    bool isLastBlock = i == theNumberOfBlocksNeeded - 1;
+    int size = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+    
+    int theBufferOffset = i * UFS_BLOCK_SIZE;
+    int theBlockNumber = theInode.direct[i];
+
+    unsigned char theBlockContent[UFS_BLOCK_SIZE];
+    memcpy(theBlockContent, (unsigned char *)buffer + theBufferOffset, size);
+
+    this->disk->writeBlock(theBlockNumber, theBlockContent);
+  }
+
+  this->writeDataBitmap(&super_block, theDataBitmap);
+  this->writeInodeRegion(&super_block, theInodeRegion);
+
+  this->disk->commit();
+  /* #endregion */
+
+  return size;
 }
 
 int LocalFileSystem::unlink(int parentInodeNumber, string name) {
