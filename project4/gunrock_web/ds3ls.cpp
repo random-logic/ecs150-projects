@@ -40,6 +40,7 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
   for (const dir_ent_t & entry : theEntries) {
     cout << entry.inum << "\t" << entry.name << endl;
   }
+  cout << endl;
 
   for (const dir_ent_t & entry : theEntries) {
     string theNameOfEntry(entry.name);

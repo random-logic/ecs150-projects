@@ -38,6 +38,4 @@ int main(int argc, char *argv[]) {
   
   for (int i = 0; i < bytesRead; ++i)
     cout << fileData[i];
-
-  cout << endl;
 }
