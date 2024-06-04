@@ -37,7 +37,7 @@ void clearBit(unsigned char * bitmap, const int bit) {
   int theBitOffset = bit % 8;
   unsigned char byte = bitmap[theIdxToCheck];
 
-  bitmap[theIdxToCheck] = byte | ~(1 << theBitOffset);
+  bitmap[theIdxToCheck] = byte & ~(1 << theBitOffset);
 }
 
 int countNumberOfAvailableBits(const unsigned char * bitmap, const int size) {
@@ -536,6 +536,10 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
 
   // Get parent inode
   inode_t & theParentInode = theInodeRegion[parentInodeNumber];
+  /* #region */
+  if (theParentInode.type != UFS_DIRECTORY)
+    return -EINVALIDINODE;
+  /* #endregion*/
 
   // Get the data bitmap
   const int theSizeOfDataBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
@@ -548,27 +552,9 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   readInodeBitmap(&super_block, theInodeBitmap);
 
   // Load all the valid directory entries into a vector
-  vector<dir_ent_t> theParentEntries(DIRECT_PTRS * THE_ENTRIES_PER_BLOCK_CONSTANT);
-  /* #region */
-  for (int i = 0; i < DIRECT_PTRS; ++i) {
-    const int theParentDataBlockNumberToRead = theParentInode.direct[i];
-    const int offset = i * THE_ENTRIES_PER_BLOCK_CONSTANT;
-    
-    if (theParentDataBlockNumberToRead == -1) {
-      theParentEntries.resize(offset);
-      break;
-    }
-
-    disk->readBlock(theParentDataBlockNumberToRead, theParentEntries.data() + offset);
-  }
-
-  for (int i = 0; i < (int)theParentEntries.size(); ++i) {
-    if (theParentEntries[i].inum == -1) {
-      theParentEntries.resize(i);
-      break;
-    }
-  }
-  /* #endregion */
+  const int theNumberOfEntries = theParentInode.size / sizeof(dir_ent_t);
+  vector<dir_ent_t> theParentEntries(theNumberOfEntries);
+  read(parentInodeNumber, theParentEntries.data(), theParentInode.size);
 
   // Now find the entry to delete
   int parentEntryIdxToDelete = -1;
@@ -581,31 +567,21 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   }
 
   if (parentEntryIdxToDelete < 0)
-    return 0;
+    return 0; // Did not find index to delete
   /* #endregion */
 
   // Now delete the contents of the inode in the entry
   const int theInodeBitToDelete = theParentEntries[parentEntryIdxToDelete].inum;
   inode_t theInodeToDelete = theInodeRegion[theInodeBitToDelete];
   /* #region */
-  if (theInodeToDelete.type == UFS_REGULAR_FILE) {
-    // This is a regular file, just delete it
-    int theNumberOfBlocksToDelete = ceilDiv(theInodeToDelete.size, UFS_BLOCK_SIZE);
-    for (int i = 0; i < theNumberOfBlocksToDelete; ++i) {
-      const int theDataBlockNumberToDelete = theInodeToDelete.direct[i];
-      const int theDataBitToDelete = dataBlockNumToBit(super_block, theDataBlockNumberToDelete);
-      clearBit(theDataBitmap, theDataBitToDelete);
-    }
-  }
-  else {
-    // This is a directory, check if it's empty before deleting it
-    dir_ent_t theChildEntries[THE_ENTRIES_PER_BLOCK_CONSTANT];
-    const int theDataBlockNumberToDelete = theInodeToDelete.direct[0];
-    disk->readBlock(theDataBlockNumberToDelete, theChildEntries);
-    if (theChildEntries[2].inum != -1)
-      return -EDIRNOTEMPTY;
+  // Make sure dir is empty if applicable
+  if (theInodeToDelete.type == UFS_DIRECTORY && theInodeToDelete.size > (int)sizeof(dir_ent_t) * 2)
+    return -EDIRNOTEMPTY;
 
-    // Delete the actual data block
+  // Now delete it's contents
+  int theNumberOfBlocksToDelete = ceilDiv(theInodeToDelete.size, UFS_BLOCK_SIZE);
+  for (int i = 0; i < theNumberOfBlocksToDelete; ++i) {
+    const int theDataBlockNumberToDelete = theInodeToDelete.direct[i];
     const int theDataBitToDelete = dataBlockNumToBit(super_block, theDataBlockNumberToDelete);
     clearBit(theDataBitmap, theDataBitToDelete);
   }
@@ -616,35 +592,38 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
 
   // Now delete the actual directory in the parent data
   theParentEntries.erase(next(theParentEntries.begin(), parentEntryIdxToDelete));
+  theParentInode.size -= sizeof(dir_ent_t);
   
-  // Make sure we set the proper identifiers to mark end in directory entry if needed
-  if (theParentEntries.size() % UFS_BLOCK_SIZE != 0) {
+  // Delete the last block if after the erase we don't need it
+  if (theParentInode.size % UFS_BLOCK_SIZE == 0) {
+    const int theNumberOfBlocksNeeded = theParentInode.size / UFS_BLOCK_SIZE;
+    
+    if (theNumberOfBlocksNeeded < DIRECT_PTRS) {
+      // Only delete if there is something to delete
+      const int theBlockNumberToDelete = theParentInode.direct[theNumberOfBlocksNeeded];
+      const int theDataBitToDelete = dataBlockNumToBit(super_block, theBlockNumberToDelete);
+      clearBit(theDataBitmap, theDataBitToDelete);
+      theParentInode.direct[theNumberOfBlocksNeeded] = -1;
+    }
+  }
+
+  // Make sure we set the proper identifiers to mark end in a block of entries
+  while (theParentInode.size % UFS_BLOCK_SIZE != 0) {
     // The next entry has to be -1
     dir_ent_t theEmptyEntry;
     theEmptyEntry.inum = -1;
     theParentEntries.push_back(theEmptyEntry);
-  }
-
-  // Make sure we delete any extra blocks
-  else { // theParentEntries.size() mod UFS_BLOCK_SIZE == 0
-    // We need to deallocate the last direct block in parent inode_t and set it to -1
-    const int theParentDirectIdxToDelete = theParentEntries.size() % UFS_BLOCK_SIZE + 1;
-    const int theParentDataBlockNumberToDelete = theParentInode.direct[theParentDirectIdxToDelete];
-    const int theDataBitToDelete = dataBlockNumToBit(super_block, theParentDataBlockNumberToDelete);
-    
-    clearBit(theDataBitmap, theDataBitToDelete);
-    theParentInode.direct[theParentDirectIdxToDelete] = -1;
+    theParentInode.size += sizeof(dir_ent_t);
   }
 
   // Now we need to write all changes
   /* #region */
-  const int theNumberOfBlocksInParent = ceilDiv(theParentEntries.size(), UFS_BLOCK_SIZE);
   disk->beginTransaction();
   writeInodeRegion(&super_block, theInodeRegion);
   writeDataBitmap(&super_block, theDataBitmap);
   writeInodeBitmap(&super_block, theInodeBitmap);
 
-  for (int i = 0; i < theNumberOfBlocksInParent; ++i) {
+  for (int i = 0; i < ceilDiv(theParentInode.size, UFS_BLOCK_SIZE); ++i) {
     const int offset = i * THE_ENTRIES_PER_BLOCK_CONSTANT;
     disk->writeBlock(theParentInode.direct[i], theParentEntries.data() + offset);
   }
