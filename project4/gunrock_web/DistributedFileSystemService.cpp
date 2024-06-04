@@ -13,13 +13,41 @@
 #include "ufs.h"
 #include "WwwFormEncodedDict.h"
 
+#include <string.h>
+
 using namespace std;
 
-bool parsePath(const string & theUrl, istringstream & thePaths);
+const int THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT = 0;
+
+bool cmp(const dir_ent_t a, const dir_ent_t b) {
+  return strcmp(a.name, b.name) < 0;
+}
+
+void setNotFound(HTTPResponse * response) {
+  response->setStatus(ClientError::notFound().status_code);
+  response->setBody(ClientError::notFound().what());
+}
+
+void setBadRequest(HTTPResponse * response) {
+  response->setStatus(ClientError::badRequest().status_code);
+  response->setBody(ClientError::badRequest().what());
+}
+
+bool parsePath(const string & theUrl, istringstream & thePaths) {
+  const string root = "ds3";
+  const int theStartingIndexOfRoot = theUrl.find(root);
+  if (theStartingIndexOfRoot == static_cast<const int>(string::npos))
+    return false;
+  
+  string allPaths = theUrl.substr(theStartingIndexOfRoot + root.size() + 1); // +1 for the extra /
+  thePaths = istringstream(allPaths);
+  return true;
+}
+
 bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & thePaths, LocalFileSystem * theLocalFileSystem);
 
 DistributedFileSystemService::DistributedFileSystemService(string diskFile) : HttpService("/ds3/") {
-  this->fileSystem = new LocalFileSystem(new Disk(diskFile, UFS_BLOCK_SIZE));
+  fileSystem = new LocalFileSystem(new Disk(diskFile, UFS_BLOCK_SIZE));
 }  
 
 void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *response) {
@@ -28,44 +56,85 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   istringstream thePaths;
   /* #region */
   if (!parsePath(theUrl, thePaths)) {
+    // Nothing to read if the path did not parse
     response->setBody("");
     return;
   }
   /* #endregion */
 
-  // Get the super block
-  super_t theSuperBlock;
-  this->fileSystem->readSuperBlock(&theSuperBlock);
-
-  // Go to the correct file / directory before reading
-  int theParentInodeNumber;
-  int theInodeNumber = theSuperBlock.inode_region_addr;
-  string theEntryName;
-  if (!getOrCreateToInode(theParentInodeNumber, theInodeNumber, theEntryName, thePaths, this->fileSystem)) {
-    // This is ClientError::badRequest()
-    // TODO Set ClientError::badRequest() ??
-    return;
+  // Go to the correct inode before reading
+  int theInodeNumberToRead = THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT;
+  string bufferNextEntryName;
+  while (getline(thePaths, bufferNextEntryName, '/')) {    
+    const int theNextInode = fileSystem->lookup(theInodeNumberToRead, bufferNextEntryName);
+    if (theNextInode == -ENOTFOUND) {
+      setNotFound(response);
+      return;
+    }
+    else if (theNextInode == -EINVALIDINODE) {
+      setBadRequest(response);
+      return;
+    }
+    
+    theInodeNumberToRead = theNextInode;
   }
+  
+  // Get stats of the inode to read
+  inode_t theInodeToRead;
+  fileSystem->stat(theInodeNumberToRead, &theInodeToRead);
 
-  // Now read the file
-  inode_t theInode;
-  this->fileSystem->stat(theInodeNumber, &theInode);
-  const int theNumberOfBytesInFile = theInode.size;
-  char theFileBuffer[theNumberOfBytesInFile + 1];
+  // Read the contents of the inode number
   /* #region */
-  if (this->fileSystem->read(theInodeNumber, theFileBuffer, theNumberOfBytesInFile)) {
-    // TODO: Handle error that happened during the read ??
-    response->setBody("");
-    return;
+  if (theInodeToRead.type == UFS_REGULAR_FILE) {
+    // Just print the contents of the file
+    vector<char> buffer(MAX_FILE_SIZE + 1);
+    int bytesRead = fileSystem->read(theInodeNumberToRead, buffer.data(), MAX_FILE_SIZE);
+    if (bytesRead < 0) {
+      setBadRequest(response);
+      return;
+    }
+
+    buffer.resize(bytesRead);
+    buffer.push_back('\0'); // Ensure null termination
+
+    response->setBody(buffer.data());
   }
+  else {
+    // Print all directory entries
+    vector<dir_ent_t> entries(MAX_FILE_SIZE / sizeof(dir_ent_t));
+    int bytesRead = fileSystem->read(theInodeNumberToRead, entries.data(), MAX_FILE_SIZE);
+    if (bytesRead < 0) {
+      setBadRequest(response);
+      return;
+    }
 
-  theFileBuffer[theNumberOfBytesInFile] = '\0'; // Ensure null termination
+    entries.resize(bytesRead / sizeof(dir_ent_t));
+    sort(entries.begin(), entries.end(), cmp);
+    
+    string theResult = "";
+    for (dir_ent_t entry : entries) {
+      string entryName(entry.name);
+      if (entryName == "." || entryName == "..")
+        continue;
+
+      inode_t theInodeOfEntry;
+      fileSystem->stat(entry.inum, &theInodeOfEntry);
+
+      if (theInodeOfEntry.type == UFS_DIRECTORY)
+        entryName.push_back('/');
+
+      theResult += entryName + "\n";
+    }
+
+    response->setBody(theResult);
+  }
   /* #endregion */
-
-  response->setBody(string(theFileBuffer));
 }
 
 void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *response) {
+  response->setStatus(500);
+  return;
+  
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
@@ -77,7 +146,7 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
   /* #endregion */
   
   // Get to the right path
-
+  
 
   // TODO ??
   // How to get the contents of the file when put?
@@ -86,6 +155,9 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
 }
 
 void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *response) {
+  response->setStatus(500);
+  return;
+  
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
@@ -98,7 +170,7 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
   
   // Get the super block
   super_t theSuperBlock;
-  this->fileSystem->readSuperBlock(&theSuperBlock);
+  fileSystem->readSuperBlock(&theSuperBlock);
 
   // Go to the correct file / directory before deleting
   int theParentInodeNumber = -1;
@@ -111,7 +183,7 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
 
     // Get the corresponding inode
     inode_t theCurrentInode;
-    this->fileSystem->stat(theInodeNumber, &theCurrentInode);
+    fileSystem->stat(theInodeNumber, &theCurrentInode);
 
     // If this is not a directory, this is an error
     if (theCurrentInode.type != UFS_DIRECTORY) {
@@ -122,7 +194,7 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
     // Read entries
     const int theNumberOfEntries = theCurrentInode.size / sizeof(dir_ent_t);
     dir_ent_t theEntries[theNumberOfEntries];
-    this->fileSystem->read(theInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
+    fileSystem->read(theInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
 
     // Now find the next entry
     bool found = false;
@@ -152,7 +224,7 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
     return;
   }
 
-  if (this->fileSystem->unlink(theParentInodeNumber, theEntryName)) {
+  if (fileSystem->unlink(theParentInodeNumber, theEntryName)) {
     // TODO Set the error that is thrown from unlink ??
     return;
   }
@@ -161,31 +233,18 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
   response->setBody("");
 }
 
-bool parsePath(const string & theUrl, istringstream & thePaths) {
-  const string root = "ds3/";
-  const int theStartingIndexOfRoot = theUrl.find(root);
-  if (theStartingIndexOfRoot == static_cast<const int>(string::npos)) {
-    return false;
-  }
-  else {
-    string allPaths = theUrl.substr(theStartingIndexOfRoot + root.size());
-    thePaths = istringstream(allPaths);
-    return true;
-  }
-}
-
-// Returns true if it was successful, false if it was a ClientError::badRequest()
-bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & thePaths, LocalFileSystem * theLocalFileSystem) {
+// Returns the inode number of dest if it was successful, -1 if it was a ClientError::badRequest()
+bool getOrCreateToInode(int & parentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & paths, LocalFileSystem * fs) {
   // ?? TODO - I think this has a bug, Imma redo this abstraction   
-  theParentInodeNumber = -1;
+  parentInodeNumber = -1;
   string buffer;
-  while (getline(thePaths, buffer, '/')) {
+  while (getline(paths, buffer, '/')) {
     // Set the entry name to what is next
     theEntryName = buffer;
     
     // Get the corresponding inode of the current directory 
     inode_t theCurrentInode;
-    theLocalFileSystem->stat(theInodeNumber, &theCurrentInode);
+    fs->stat(theInodeNumber, &theCurrentInode);
 
     // If this is not a directory, this is a ClientError::badRequest()
     if (theCurrentInode.type != UFS_DIRECTORY) {
@@ -195,14 +254,14 @@ bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string
     // Read entries
     const int theNumberOfEntries = theCurrentInode.size / sizeof(dir_ent_t);
     dir_ent_t theEntries[theNumberOfEntries];
-    theLocalFileSystem->read(theInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
+    fs->read(theInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
 
     // Now switch to the next inode number
     bool found = false;
     for (dir_ent_t entry : theEntries) {
       if (string(entry.name) == theEntryName) {
         found = true;
-        theParentInodeNumber = theInodeNumber;
+        parentInodeNumber = theInodeNumber;
         theInodeNumber = entry.inum;
         break; // Done
       }
@@ -210,8 +269,8 @@ bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string
 
     // Not found, then create a new corresponding entry
     if (!found) {
-      theParentInodeNumber = theInodeNumber;
-      theInodeNumber = theLocalFileSystem->create(theInodeNumber, UFS_DIRECTORY, theEntryName);
+      parentInodeNumber = theInodeNumber;
+      theInodeNumber = fs->create(theInodeNumber, UFS_DIRECTORY, theEntryName);
     }
   }
 
