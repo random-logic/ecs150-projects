@@ -608,7 +608,7 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
   }
 
   // Make sure we set the proper identifiers to mark end in a block of entries
-  while (theParentInode.size % UFS_BLOCK_SIZE != 0) {
+  while (theParentEntries.size() * sizeof(dir_ent_t) % UFS_BLOCK_SIZE != 0) {
     // The next entry has to be -1
     dir_ent_t theEmptyEntry;
     theEmptyEntry.inum = -1;
