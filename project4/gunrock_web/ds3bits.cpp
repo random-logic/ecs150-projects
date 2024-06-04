@@ -39,7 +39,7 @@ int main(int argc, char *argv[]) {
 
   const int theSizeOfDataBitmapArr = theSuperBlock.data_bitmap_len * UFS_BLOCK_SIZE;
   unsigned char theDataBitmap[theSizeOfDataBitmapArr];
-  theLocalFileSystem.readInodeBitmap(&theSuperBlock, theDataBitmap);
+  theLocalFileSystem.readDataBitmap(&theSuperBlock, theDataBitmap);
 
   cout << "Data bitmap" << endl;
   for (unsigned char byte : theDataBitmap) {
