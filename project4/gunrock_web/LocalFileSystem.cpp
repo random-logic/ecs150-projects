@@ -613,7 +613,6 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
     dir_ent_t theEmptyEntry;
     theEmptyEntry.inum = -1;
     theParentEntries.push_back(theEmptyEntry);
-    theParentInode.size += sizeof(dir_ent_t);
   }
 
   // Now we need to write all changes
