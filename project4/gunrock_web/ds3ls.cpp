@@ -26,20 +26,14 @@ void printContentsOfAllDirectories(const int inodeNum, LocalFileSystem &fs, stri
   if (fs.stat(inodeNum, &theInode))
     cout << "stat err" << endl;
   
-  vector<dir_ent_t> theEntries(THE_MAX_NUMBER_OF_ENTRIES_CONSTANT);
-  const int theNumberOfBytesRead = fs.read(inodeNum, theEntries.data(), MAX_FILE_SIZE);
+  const int theNumberOfEntries = theInode.size / sizeof(dir_ent_t);
+  dir_ent_t theEntries[theNumberOfEntries];
+  if (fs.read(inodeNum, theEntries, theInode.size) < 0)
+    return;
 
-  if (theNumberOfBytesRead < 0)
-    cout << "read err" << endl;
+  sort(theEntries, theEntries + theNumberOfEntries, cmp);
 
-  int theActualNumberOfEntries = theNumberOfBytesRead / (int)sizeof(dir_ent_t);
-
-  theEntries.resize(theActualNumberOfEntries);
-
-  vector<dir_ent_t> theEntriesSorted(theEntries.begin(), theEntries.end());
-  sort(theEntriesSorted.begin(), theEntriesSorted.end(), cmp);
-
-  for (const dir_ent_t & entry : theEntriesSorted) {
+  for (const dir_ent_t & entry : theEntries) {
     cout << entry.inum << "\t" << entry.name << endl;
   }
   cout << endl;
