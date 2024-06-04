@@ -24,7 +24,7 @@ void printContentsOfAllDirectories(const int inodeNum, LocalFileSystem &fs, stri
   inode_t theInode;
 
   if (fs.stat(inodeNum, &theInode))
-    cout << "stat err" << endl;
+    return;
   
   const int theNumberOfEntries = theInode.size / sizeof(dir_ent_t);
   dir_ent_t theEntries[theNumberOfEntries];
