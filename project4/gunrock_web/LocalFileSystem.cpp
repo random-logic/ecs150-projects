@@ -95,98 +95,6 @@ int countBlocks(const inode_t & theInode) {
   }
 }
 
-// NOTE - this should always be called last, or it's an error
-int doWrite(int inodeNumber, const void *buffer, int size, LocalFileSystem * fs, bool checkForFile = true, bool doBeginTransaction = true) {
-  super_t super_block;
-  fs->readSuperBlock(&super_block);
-
-  // Check input
-  /* #region */
-  if (!isValidInodeNumber(super_block, inodeNumber))
-    return -EINVALIDINODE;
-
-  if (size < 0 || size > MAX_FILE_SIZE)
-    return -EINVALIDSIZE;
-  /* #endregion */
-
-  // Stat the inode
-  inode_t theInode;
-  /* #region */
-  fs->stat(inodeNumber, &theInode);
-
-  if (checkForFile && theInode.type != UFS_REGULAR_FILE)
-    return -EINVALIDTYPE;
-  /* #endregion */
-
-  // Get data bitmap
-  const int theLenOfDataBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
-  unsigned char theDataBitmap[theLenOfDataBitmapArr];
-  fs->readDataBitmap(&super_block, theDataBitmap);
-
-  // See if we need to allocate or deallocate blocks
-  // After this, we will have exactly the number of blocks needed in our inode
-  int theNumberOfBlocksPresent = countBlocks(theInode);
-  int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
-  int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
-  int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
-  /* #region */
-  if (theNumberOfBlocksNeeded + theNumberOfBlocksPresent > DIRECT_PTRS)
-    return -ENOTENOUGHSPACE;
-
-  for (int i = 0; i < theNumberOfBlocksToAllocate; ++i) {
-    int idx = theNumberOfBlocksPresent + i; // Append at the end
-    
-    // Get the first available data block number, and set that bit
-    int theAvailableBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
-    if (theAvailableBlockNumber == -1)
-      return -ENOTENOUGHSPACE;
-    setBit(theDataBitmap, theAvailableBlockNumber);
-
-    // Set the available block number in inode
-    theInode.direct[idx] = theAvailableBlockNumber;
-  }
-
-  for (int i = 1; i <= theNumberOfBlocksToDeallocate; ++i) {
-    int idx = theNumberOfBlocksPresent - i; // Start deallocating from the end
-    int theBlockNumberToFree = theInode.direct[idx];
-
-    // Clear the bit to deallocate
-    clearBit(theDataBitmap, theBlockNumberToFree);
-  }
-  /* #endregion */
-
-  // Get the size of the last block
-  int theSizeOnTheLastBlock = theInode.size % UFS_BLOCK_SIZE;
-  if (theSizeOnTheLastBlock == 0)
-    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
-
-  // Do write
-  /* #region */
-  if (doBeginTransaction)
-    fs->disk->beginTransaction();
-  
-  fs->writeDataBitmap(&super_block, theDataBitmap);
-
-  // Write to all the blocks
-  for (int i = 0; i < theNumberOfBlocksNeeded; ++i) {
-    bool isLastBlock = i == theNumberOfBlocksNeeded - 1;
-    int size = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
-    
-    int theBufferOffset = i * UFS_BLOCK_SIZE;
-    int theBlockNumber = theInode.direct[i];
-
-    unsigned char theBlockContent[UFS_BLOCK_SIZE];
-    memcpy(theBlockContent, (unsigned char *)buffer + theBufferOffset, size);
-
-    fs->disk->writeBlock(theBlockNumber, theBlockContent);
-  }
-
-  fs->disk->commit();
-  /* #endregion */
-
-  return size;
-}
-
 /* #endregion Helper functions */
 
 /* #region Class functions */
@@ -613,77 +521,119 @@ int LocalFileSystem::unlink(int parentInodeNumber, string name) {
     return -EUNLINKNOTALLOWED;
   /* #endregion */
 
-  // Get parent inode
-  inode_t theParentInode;
-  this->stat(parentInodeNumber, &theParentInode);
+  // Get all the inodes
+  const int theNumberOfInodes = super_block.num_inodes;
+  inode_t theInodeRegion[theNumberOfInodes];
+  readInodeRegion(&super_block, theInodeRegion);
 
-  // Read blocks in parent inode
-  int theNumberOfEntries = theParentInode.size / sizeof(dir_ent_t);
-  dir_ent_t theEntries[theNumberOfEntries];
-  this->read(parentInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
+  // Get parent inode
+  inode_t & theParentInode = theInodeRegion[parentInodeNumber];
 
   // Get the data bitmap
-  const int theSizeOfDataBitmapArr = super_block.data_bitmap_len;
+  const int theSizeOfDataBitmapArr = super_block.data_bitmap_len * UFS_BLOCK_SIZE;
   unsigned char theDataBitmap[theSizeOfDataBitmapArr];
-  this->readDataBitmap(&super_block, theDataBitmap);
+  readDataBitmap(&super_block, theDataBitmap);
 
-  // Find the corresponding block to remove
-  int idxToRemove = -1;
+  // Get the inode bitmap
+  const int theSizeOfInodeBitmapArr = super_block.inode_bitmap_len * UFS_BLOCK_SIZE;
+  unsigned char theInodeBitmap[theSizeOfInodeBitmapArr];
+  readInodeBitmap(&super_block, theInodeBitmap);
+
+  // Load all the valid directory entries into a vector
+  vector<dir_ent_t> theParentEntries(DIRECT_PTRS * THE_ENTRIES_PER_BLOCK_CONSTANT);
   /* #region */
-  for (int i = 0; i < theNumberOfEntries; ++i) {
-    if (string(theEntries[i].name) == name) {
-      // Found it
-      inode_t theEntryInode;
-      this->stat(theEntries[i].inum, &theEntryInode);
+  for (int i = 0; i < DIRECT_PTRS; ++i) {
+    const int theParentDataBlockNumberToRead = theParentInode.direct[i];
+    const int offset = i * THE_ENTRIES_PER_BLOCK_CONSTANT;
+    
+    if (theParentDataBlockNumberToRead == -1) {
+      theParentEntries.resize(offset);
+      break;
+    }
 
-      if (theEntryInode.type == UFS_DIRECTORY) {
-        // This is a directory, only delete if it's empty
-        if (theEntryInode.size == sizeof(dir_ent_t) * 2) {
-          // Then only .. and . are present
-          
-          // First we need to delete the corresponding data block that store .. and .
-          int theBlockNumberToDelete = theEntryInode.direct[0];
-          clearBit(theDataBitmap, theBlockNumberToDelete);
+    disk->readBlock(theParentDataBlockNumberToRead, theParentEntries.data() + offset);
+  }
 
-          // Set the directory entry for removal
-          idxToRemove = i;
-          break;
-        }
-        else {
-          return -EDIRNOTEMPTY;
-        }
-      }
-      else {
-        // This is a file, we can just delete it
-        idxToRemove = i;
-        break;
-      }
+  for (int i = 0; i < (int)theParentEntries.size(); ++i) {
+    if (theParentEntries[i].inum == -1) {
+      theParentEntries.resize(i);
+      break;
     }
   }
   /* #endregion */
 
-  // Finish if there is nothing to remove
-  if (idxToRemove == -1)
-    return 0;
+  // ??
 
-  // Remove the corresponding block
-  dir_ent_t theEntriesAfterRemoval[theNumberOfEntries - 1];
-  /* #region */
-  memcpy(theEntriesAfterRemoval, theEntries, idxToRemove * sizeof(dir_ent_t));
-  memcpy(
-    theEntriesAfterRemoval + idxToRemove * sizeof(dir_ent_t), 
-    theEntries + (idxToRemove + 1) * sizeof(dir_ent_t), 
-    theNumberOfEntries - idxToRemove * sizeof(dir_ent_t)
-  );
-  /* #endregion */
+  // Now find the corresponding entry in the parent inode
+  /*for (int parentDirectIdx = 0; parentDirectIdx < DIRECT_PTRS; ++parentDirectIdx) {
+    int theDataBlockNumberToReadFromParent = theParentInode.direct[parentDirectIdx];
+    if (theDataBlockNumberToReadFromParent == -1)
+      return 0;
+    
+    dir_ent_t theParentEntries[THE_ENTRIES_PER_BLOCK_CONSTANT];
+    disk->readBlock(theDataBlockNumberToReadFromParent, theParentEntries);
 
-  // Now write the changes
-  this->disk->beginTransaction();
-  this->writeDataBitmap(&super_block, theDataBitmap);
-  doWrite(parentInodeNumber, theEntriesAfterRemoval, theNumberOfEntries - 1, this, false, false);
-  this->disk->commit();
+    for (int entryIdx = 0; entryIdx < THE_ENTRIES_PER_BLOCK_CONSTANT; ++entryIdx) {
+      dir_ent_t entry = theParentEntries[entryIdx];
 
-  return 0;
+      if (entry.inum == -1)
+        return 0;
+
+      if (string(entry.name) == name) {
+        // We found it, now delete this
+        int theInodeNumberToDelete = entry.inum;
+        inode_t & theInodeToDelete = theInodeRegion[theInodeNumberToDelete];
+
+        // Delete the contents of inode before deleting the actual inode
+        if (theInodeToDelete.type == UFS_DIRECTORY) {
+          // This is a directory
+          // Check if we can delete it
+          dir_ent_t theEntries[THE_ENTRIES_PER_BLOCK_CONSTANT];
+          disk->readBlock(theInodeToDelete.direct[0], theEntries);
+          if (theEntries[2].inum != -1) // This directory is not empty
+            return -EDIRNOTEMPTY;
+
+          // ??
+        }
+        else {
+          // This is a file
+          // Delete all of the data blocks
+          const int theNumberOfBlocks = ceilDiv(theInodeToDelete.size, UFS_BLOCK_SIZE);
+          
+          for (int j = 0; j < theNumberOfBlocks; ++j) {
+            // Delete this block from data block
+            const int theDataBlockToClear = theInodeToDelete.direct[j];
+            const int theDataBitToClear = theDataBlockToClear - super_block.data_region_addr;
+            clearBit(theDataBitmap, theDataBitToClear);
+          }
+        }
+
+        // ??
+        // Now delete the actual inode
+        const int theInodeBitToClear = theInodeNumberToDelete - super_block.inode_region_addr;
+        clearBit(theInodeBitmap, theInodeBitToClear);
+
+        // Now delete the entry from the parent directory
+        for (int j = entryIdx; j < THE_ENTRIES_PER_BLOCK_CONSTANT - 1; ++j) {
+          theParentEntries[j] = theParentEntries[j + 1];
+        }
+
+        // Delete the parent directory block if the block is empty
+        if (theParentEntries[0].inum == -1) {
+          // ??
+        }
+
+        // Write changes
+        disk->beginTransaction();
+        
+        disk->commit();
+
+        return 0;
+      }
+    }
+  }*/
+
+  return 0; // Not found
 }
 
 bool LocalFileSystem::diskHasSpace(super_t *super, int numInodesNeeded, int numDataBytesNeeded, int numDataBlocksNeeded) {
