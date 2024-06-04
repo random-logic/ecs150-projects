@@ -24,7 +24,8 @@ int main(int argc, char *argv[]) {
 
   int theInodeNumber = atoi(argv[2]);
   inode_t theInode;
-  theLocalFileSystem.stat(theInodeNumber, &theInode);
+  if (theLocalFileSystem.stat(theInodeNumber, &theInode))
+    return -1;
 
   cout << "File blocks" << endl;
   for (int i = 0; i < (theInode.size + UFS_BLOCK_SIZE - 1) / UFS_BLOCK_SIZE; ++i) {
@@ -33,9 +34,11 @@ int main(int argc, char *argv[]) {
   cout << endl;
 
   cout << "File data" << endl;
-  char fileData[MAX_FILE_SIZE];
-  int bytesRead = theLocalFileSystem.read(theInodeNumber, fileData, MAX_FILE_SIZE);
+  char fileData[theInode.size + 1];
+  const int bytesRead = theLocalFileSystem.read(theInodeNumber, fileData, theInode.size);
+  if (bytesRead < 0)
+    return -1;
   
-  for (int i = 0; i < bytesRead; ++i)
-    cout << fileData[i];
+  fileData[theInode.size] = '\0'; // Ensure null termination
+  cout << fileData;
 }
