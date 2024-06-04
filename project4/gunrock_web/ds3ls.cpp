@@ -11,22 +11,23 @@
 
 using namespace std;
 
+const int THE_MAX_NUMBER_OF_ENTRIES_CONSTANT = MAX_FILE_SIZE / sizeof(dir_ent_t);
 const int THE_ROOT_INODE_NUMBER_CONSTANT = 0;
 
 bool cmp(const dir_ent_t & a, const dir_ent_t & b) {
   return strcmp(a.name, b.name) < 0;
 }
 
-void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSystem &theLocalFileSystem, string name = "/") {
-  cout << "Directory " << name << endl;
+void printContentsOfAllDirectories(const int inodeNum, LocalFileSystem &fs, string path = "/") {
+  cout << "Directory " << path << endl;
   
   inode_t theInode;
 
-  if (theLocalFileSystem.stat(theInodeNumberToRead, &theInode))
+  if (fs.stat(inodeNum, &theInode))
     cout << "stat err" << endl;
   
-  vector<dir_ent_t> theEntries(MAX_FILE_SIZE / sizeof(dir_ent_t));
-  const int theNumberOfBytesRead = theLocalFileSystem.read(theInodeNumberToRead, theEntries.data(), UFS_BLOCK_SIZE);
+  vector<dir_ent_t> theEntries(THE_MAX_NUMBER_OF_ENTRIES_CONSTANT);
+  const int theNumberOfBytesRead = fs.read(inodeNum, theEntries.data(), MAX_FILE_SIZE);
 
   if (theNumberOfBytesRead < 0)
     cout << "read err" << endl;
@@ -35,29 +36,28 @@ void printContentsOfAllDirectories(const int theInodeNumberToRead, LocalFileSyst
 
   theEntries.resize(theActualNumberOfEntries);
 
-  sort(theEntries.begin(), theEntries.end(), cmp);
+  vector<dir_ent_t> theEntriesSorted(theEntries.begin(), theEntries.end());
+  sort(theEntriesSorted.begin(), theEntriesSorted.end(), cmp);
 
-  for (const dir_ent_t & entry : theEntries) {
+  for (const dir_ent_t & entry : theEntriesSorted) {
     cout << entry.inum << "\t" << entry.name << endl;
   }
   cout << endl;
 
-  for (const dir_ent_t & entry : theEntries) {
+  for (const dir_ent_t entry : theEntries) {
     string theNameOfEntry(entry.name);
     if (theNameOfEntry == ".." || theNameOfEntry == ".")
       continue;
 
     inode_t theNextInode;
-    theLocalFileSystem.stat(entry.inum, &theNextInode);
+    if (fs.stat(entry.inum, &theNextInode))
+      continue;
 
     if (theNextInode.type != UFS_DIRECTORY)
       continue;
 
-    if (name != "/")
-      name.push_back('/');
-    theNameOfEntry = name + theNameOfEntry;
-
-    printContentsOfAllDirectories(entry.inum, theLocalFileSystem, theNameOfEntry);
+    string theDirPath = path + theNameOfEntry + "/";
+    printContentsOfAllDirectories(entry.inum, fs, theDirPath);
   }
 }
 
