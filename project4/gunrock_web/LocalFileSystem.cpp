@@ -693,7 +693,7 @@ void LocalFileSystem::writeDataBitmap(super_t *super, unsigned char *dataBitmap)
 void LocalFileSystem::readInodeRegion(super_t *super, inode_t *inodes) {
   for (int i = 0; i < super->inode_region_len; ++i) {
     int theBlockToRead = super->inode_region_addr + i;
-    auto theBufferStart = inodes + i * UFS_BLOCK_SIZE;
+    auto theBufferStart = inodes + i * THE_INODES_PER_BLOCK_CONSTANT;
     disk->readBlock(theBlockToRead, theBufferStart);
   }
 }
@@ -701,7 +701,7 @@ void LocalFileSystem::readInodeRegion(super_t *super, inode_t *inodes) {
 void LocalFileSystem::writeInodeRegion(super_t *super, inode_t *inodes) {
   for (int i = 0; i < super->inode_region_len; ++i) {
     int theBlockToRead = super->inode_region_addr + i;
-    auto theBufferStart = inodes + i * UFS_BLOCK_SIZE;
+    auto theBufferStart = inodes + i * THE_INODES_PER_BLOCK_CONSTANT;
     disk->writeBlock(theBlockToRead, theBufferStart);
   }
 }
