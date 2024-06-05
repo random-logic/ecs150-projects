@@ -54,8 +54,6 @@ bool parsePath(const string & theUrl, istringstream & thePaths) {
   thePaths = istringstream(allPaths);
   return true;
 }
-
-bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & thePaths, LocalFileSystem * theLocalFileSystem);
 /* #endregion Helpers */
 
 DistributedFileSystemService::DistributedFileSystemService(string diskFile) : HttpService("/ds3/") {
@@ -203,9 +201,6 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
 }
 
 void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *response) {
-  response->setStatus(500);
-  return;
-  
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
@@ -215,6 +210,13 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
     return;
   }
   /* #endregion */
+
+  // Convert the paths into a vector
+  vector<string> thePathsVec;
+  string bufferNextEntryName;
+  while (getline(thePaths, bufferNextEntryName, '/')) {
+    thePathsVec.push_back(bufferNextEntryName);
+  }
   
   // Get the super block
   super_t theSuperBlock;
@@ -222,41 +224,29 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
 
   // Go to the correct file / directory before deleting
   int theParentInodeNumber = -1;
-  int theInodeNumber = theSuperBlock.inode_region_addr;
-  string theEntryName, buffer;
+  int theInodeNumber = THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT;
+  string theEntryName;
   /* #region */
-  while (getline(thePaths, buffer, '/')) {
+  for (int i = 0; i < (int)thePathsVec.size(); ++i) {
     // Set the proper variables
-    theEntryName = buffer;
+    theEntryName = thePathsVec[i];
 
-    // Get the corresponding inode
+    // Stat the inode
     inode_t theCurrentInode;
     fileSystem->stat(theInodeNumber, &theCurrentInode);
 
     // If this is not a directory, this is an error
     if (theCurrentInode.type != UFS_DIRECTORY) {
-      // ?? TODO - set response to ClientError::badRequest()
+      setBadRequest(response);
       return;
     }
 
-    // Read entries
-    const int theNumberOfEntries = theCurrentInode.size / sizeof(dir_ent_t);
-    dir_ent_t theEntries[theNumberOfEntries];
-    fileSystem->read(theInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
-
-    // Now find the next entry
-    bool found = false;
-    for (dir_ent_t entry : theEntries) {
-      if (string(entry.name) == theEntryName) {
-        found = true;
-        theParentInodeNumber = theInodeNumber;
-        theInodeNumber = entry.inum;
-        break; // Done
-      }
-    }
+    // Lookup the corresponding inode
+    theParentInodeNumber = theInodeNumber;
+    theInodeNumber = fileSystem->lookup(theInodeNumber, theEntryName);
 
     // Not found, then we are done
-    if (!found) {
+    if (theInodeNumber < 0) {
       // Nothing to do
       response->setBody("");
       return;
@@ -268,59 +258,16 @@ void DistributedFileSystemService::del(HTTPRequest *request, HTTPResponse *respo
   /* #region */
   // It's an error if there is no parent directory to delete from
   if (theParentInodeNumber == -1) {
-    // TODO: Get error ??
+    setBadRequest(response);
     return;
   }
 
-  if (fileSystem->unlink(theParentInodeNumber, theEntryName)) {
-    // TODO Set the error that is thrown from unlink ??
+  const int unlinkStatus = fileSystem->unlink(theParentInodeNumber, theEntryName);
+  if (unlinkStatus < 0) {
+    setBadRequest(response);
     return;
   }
   /* #endregion */
 
   response->setBody("");
-}
-
-// Returns the inode number of dest if it was successful, -1 if it was a ClientError::badRequest()
-bool getOrCreateToInode(int & parentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & paths, LocalFileSystem * fs) {
-  // ?? TODO - I think this has a bug, Imma redo this abstraction   
-  parentInodeNumber = -1;
-  string buffer;
-  while (getline(paths, buffer, '/')) {
-    // Set the entry name to what is next
-    theEntryName = buffer;
-    
-    // Get the corresponding inode of the current directory 
-    inode_t theCurrentInode;
-    fs->stat(theInodeNumber, &theCurrentInode);
-
-    // If this is not a directory, this is a ClientError::badRequest()
-    if (theCurrentInode.type != UFS_DIRECTORY) {
-      return false;
-    }
-
-    // Read entries
-    const int theNumberOfEntries = theCurrentInode.size / sizeof(dir_ent_t);
-    dir_ent_t theEntries[theNumberOfEntries];
-    fs->read(theInodeNumber, theEntries, theNumberOfEntries * sizeof(dir_ent_t));
-
-    // Now switch to the next inode number
-    bool found = false;
-    for (dir_ent_t entry : theEntries) {
-      if (string(entry.name) == theEntryName) {
-        found = true;
-        parentInodeNumber = theInodeNumber;
-        theInodeNumber = entry.inum;
-        break; // Done
-      }
-    }
-
-    // Not found, then create a new corresponding entry
-    if (!found) {
-      parentInodeNumber = theInodeNumber;
-      theInodeNumber = fs->create(theInodeNumber, UFS_DIRECTORY, theEntryName);
-    }
-  }
-
-  return true;
 }
