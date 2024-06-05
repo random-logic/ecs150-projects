@@ -190,7 +190,6 @@ int LocalFileSystem::read(int inodeNumber, void *buffer, int size) {
   /* #endregion */
 
   // Do actual read
-  // This is a file
   const int theActualSize = min(size, theInode.size);
   const int theNumberOfBlocksToRead = ceilDiv(theActualSize, UFS_BLOCK_SIZE);
   int theSizeOnTheLastBlock = theActualSize % UFS_BLOCK_SIZE;
