@@ -347,7 +347,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     disk->readBlock(theEntriesBlockNumber, theEntriesBlock);
 
     // Now add it to the end of all the previous entries
-    const int theIdxToAddToInEntriesBlock = parentInode.size % UFS_BLOCK_SIZE;
+    const int theIdxToAddToInEntriesBlock = parentInode.size % UFS_BLOCK_SIZE / sizeof(dir_ent_t);
     theEntriesBlock[theIdxToAddToInEntriesBlock].inum = theAvailableInodeNumber;
     strcpy(theEntriesBlock[theIdxToAddToInEntriesBlock].name, name.c_str());
   }
