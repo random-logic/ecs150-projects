@@ -395,12 +395,14 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
     return -EINVALIDSIZE;
   /* #endregion */
 
-  // Stat the inode
-  inode_t theInode;
-  /* #region */
-  stat(inodeNumber, &theInode);
+  // Get the inode region
+  inode_t theInodeRegion[super_block.num_inodes];
+  readInodeRegion(&super_block, theInodeRegion);
 
-  if (theInode.type != UFS_REGULAR_FILE)
+  // Stat the inode
+  inode_t & theInodeToWrite = theInodeRegion[inodeNumber];
+  /* #region */
+  if (theInodeToWrite.type != UFS_REGULAR_FILE)
     return -EINVALIDTYPE;
   /* #endregion */
 
@@ -411,12 +413,12 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
 
   // See if we need to allocate or deallocate blocks
   // After this, we will have exactly the number of blocks needed in our inode
-  int theNumberOfBlocksPresent = countBlocks(theInode);
+  int theNumberOfBlocksPresent = ceilDiv(theInodeToWrite.size, UFS_BLOCK_SIZE);
   int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
   int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
   int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
   /* #region */
-  if (theNumberOfBlocksNeeded + theNumberOfBlocksPresent > DIRECT_PTRS)
+  if (theNumberOfBlocksNeeded > DIRECT_PTRS)
     return -ENOTENOUGHSPACE;
 
   for (int i = 0; i < theNumberOfBlocksToAllocate; ++i) {
@@ -429,39 +431,41 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
     setBit(theDataBitmap, theAvailableBlockNumber);
 
     // Set the available block number in inode
-    theInode.direct[idx] = theAvailableBlockNumber;
+    theInodeToWrite.direct[idx] = theAvailableBlockNumber;
   }
 
   for (int i = 1; i <= theNumberOfBlocksToDeallocate; ++i) {
     int idx = theNumberOfBlocksPresent - i; // Start deallocating from the end
-    int theBlockNumberToFree = theInode.direct[idx];
+    int theBlockNumberToFree = theInodeToWrite.direct[idx];
 
     // Clear the bit to deallocate
     clearBit(theDataBitmap, theBlockNumberToFree);
   }
   /* #endregion */
 
+  // Now set the size in inode to reflect what we are about to write
+  theInodeToWrite.size = size;
+
   // Get the size of the last block
-  int theSizeOnTheLastBlock = theInode.size % UFS_BLOCK_SIZE;
-  if (theSizeOnTheLastBlock == 0)
-    theSizeOnTheLastBlock = UFS_BLOCK_SIZE;
+  const int theSizeOnTheLastBlock = (theInodeToWrite.size - 1) % UFS_BLOCK_SIZE + 1;
 
   // Do write
   /* #region */
   disk->beginTransaction();
   
+  writeInodeRegion(&super_block, theInodeRegion);
   writeDataBitmap(&super_block, theDataBitmap);
 
   // Write to all the blocks
   for (int i = 0; i < theNumberOfBlocksNeeded; ++i) {
-    bool isLastBlock = i == theNumberOfBlocksNeeded - 1;
-    int size = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
+    const bool isLastBlock = i == theNumberOfBlocksNeeded - 1;
+    const int sizeToCopy = isLastBlock ? theSizeOnTheLastBlock : UFS_BLOCK_SIZE;
     
-    int theBufferOffset = i * UFS_BLOCK_SIZE;
-    int theBlockNumber = theInode.direct[i];
+    const int theBufferOffset = i * UFS_BLOCK_SIZE;
+    const int theBlockNumber = theInodeToWrite.direct[i];
 
     unsigned char theBlockContent[UFS_BLOCK_SIZE];
-    memcpy(theBlockContent, (unsigned char *)buffer + theBufferOffset, size);
+    memcpy(theBlockContent, (unsigned char *)buffer + theBufferOffset, sizeToCopy);
 
     disk->writeBlock(theBlockNumber, theBlockContent);
   }
