@@ -304,6 +304,9 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
 
     // Set the appropriate size
     theInodes[theAvailableInodeNumber].size = 2 * sizeof(dir_ent_t);
+
+    // Set the block in the inode
+    theInodes[theAvailableInodeNumber].direct[0] = availableCreatedDataBlockNumber;
   }
   else {
     // This is a file, it's empty
