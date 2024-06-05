@@ -242,7 +242,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   const int theNumberOfParentEntries = parentInode.size / sizeof(dir_ent_t);
   dir_ent_t theParentEntries[theNumberOfParentEntries];
   /* #region */
-  this->read(parentInodeNumber, theParentEntries, theNumberOfParentEntries * sizeof(dir_ent_t));
+  read(parentInodeNumber, theParentEntries, theNumberOfParentEntries * sizeof(dir_ent_t));
   for (int i = 0; i < theNumberOfParentEntries; ++i) {
     dir_ent_t theEntryToCheck = theParentEntries[i];
     string theEntryName(theEntryToCheck.name);
@@ -265,14 +265,14 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   // Find the first inode bit that is available, and mark it in bitmap
   const int theAvailableInodeNumber = getFirstAvailableBit(theInodeBitmap, theLenOfInodeBitmapArr);
   /* #region */
-  if (theAvailableInodeNumber < 0)
+  if (theAvailableInodeNumber < 0 || theAvailableInodeNumber >= super_block.num_inodes)
     return -ENOTENOUGHSPACE;
 
   setBit(theInodeBitmap, theAvailableInodeNumber);
   /* #endregion */
 
   // Now create a new inode for the contents of this entry
-  int theCreatedBlockNumber = -1;
+  int availableCreatedDataBit = -1;
   dir_ent_t theCreatedBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
   /* #region */
   theInodes[theAvailableInodeNumber].type = type;
@@ -284,18 +284,22 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     // The other one ".." pointing to parent
 
     // Get the first available data block, and set it in bitmap
-    theCreatedBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    availableCreatedDataBit = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
 
-    if (theCreatedBlockNumber == -1)
+    if (availableCreatedDataBit < 0 || availableCreatedDataBit >= super_block.num_data)
       return -ENOTENOUGHSPACE;
 
-    setBit(theDataBitmap, theCreatedBlockNumber);
+    setBit(theDataBitmap, availableCreatedDataBit);
     
     // Init the entries block appropriately
     theCreatedBlock[0].inum = theAvailableInodeNumber;
     strcpy(theCreatedBlock[0].name, ".");
     theCreatedBlock[1].inum = parentInodeNumber;
     strcpy(theCreatedBlock[1].name, "..");
+
+    // Set the rest of the entries to -1
+    for (int i = 2; i < THE_ENTRIES_PER_BLOCK_CONSTANT; ++i)
+      theCreatedBlock[i].inum = -1;
 
     // Set the appropriate size
     theInodes[theAvailableInodeNumber].size = 2 * sizeof(dir_ent_t);
@@ -316,29 +320,30 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     theEntriesBlock[0].inum = theAvailableInodeNumber;
     strcpy(theEntriesBlock[0].name, name.c_str());
 
-    for (int i = 1; i < THE_ENTRIES_PER_BLOCK_CONSTANT; ++i) {
+    for (int i = 1; i < THE_ENTRIES_PER_BLOCK_CONSTANT; ++i)
       theEntriesBlock[i].inum = -1;
-    }
 
     // Read bitmap to find the first available data block to write to
-    theEntriesBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
-    if (theEntriesBlockNumber == -1)
+    const int theEntriesBlockBit = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    if (theEntriesBlockBit < -1 || theEntriesBlockBit >= super_block.num_data)
       return -ENOTENOUGHSPACE;
+    setBit(theDataBitmap, theEntriesBlockBit);
+    theEntriesBlockNumber = dataBitToBlockNum(super_block, theEntriesBlockBit);
 
     // Add the new block to our parent
-    int theIdxToAppendToParentInodeDirect = parentInode.size / UFS_BLOCK_SIZE;
+    const int theIdxToAppendToParentInodeDirect = parentInode.size / UFS_BLOCK_SIZE;
     parentInode.direct[theIdxToAppendToParentInodeDirect] = theEntriesBlockNumber;
   }
   else {
-    int theDirectSize = parentInode.size / sizeof(dir_ent_t);
-    int theLastBlockIdx = theDirectSize - 1;
+    const int theDirectSize = parentInode.size / sizeof(dir_ent_t);
+    const int theLastBlockIdx = theDirectSize - 1;
     theEntriesBlockNumber = parentInode.direct[theLastBlockIdx];
     
     // Read the last block
-    this->disk->readBlock(theEntriesBlockNumber, theEntriesBlock);
+    disk->readBlock(theEntriesBlockNumber, theEntriesBlock);
 
     // Now add it to the end of all the previous entries
-    int theIdxToAddToInEntriesBlock = parentInode.size % UFS_BLOCK_SIZE;
+    const int theIdxToAddToInEntriesBlock = parentInode.size % UFS_BLOCK_SIZE;
     theEntriesBlock[theIdxToAddToInEntriesBlock].inum = theAvailableInodeNumber;
     strcpy(theEntriesBlock[theIdxToAddToInEntriesBlock].name, name.c_str());
   }
@@ -356,8 +361,8 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   this->writeInodeRegion(&super_block, theInodes);
 
   this->disk->writeBlock(theEntriesBlockNumber, theEntriesBlock);
-  if (theCreatedBlockNumber != -1)
-    this->disk->writeBlock(theCreatedBlockNumber, theCreatedBlock);
+  if (availableCreatedDataBit != -1)
+    this->disk->writeBlock(availableCreatedDataBit, theCreatedBlock);
   
   this->disk->commit();
   /* #endregion */
