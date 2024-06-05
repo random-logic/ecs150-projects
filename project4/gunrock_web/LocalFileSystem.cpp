@@ -55,9 +55,10 @@ int ceilDiv(const int num, const int den) {
 }
 
 // Note - len is the length of the array, number of bits is len * 8
+// Gets the first bit that is 0
 int getFirstAvailableBit(const unsigned char * bitmap, const int len) {
   for (int i = 0; i < len * 8; ++i) {
-    if (getBit(bitmap, i)) {
+    if (!getBit(bitmap, i)) {
       return i;
     }
   }
@@ -85,24 +86,6 @@ inline int dataBlockNumToBit(const super_t & super, const int num) {
 inline int dataBitToBlockNum(const super_t & super, const int bit) {
   return bit + super.data_bitmap_addr;
 }
-
-int countBlocks(const inode_t & theInode) {
-  if (theInode.type == UFS_DIRECTORY) {
-    int count = 0;
-    for (int i = 0; i < DIRECT_PTRS; ++i) {
-      if ((int)theInode.direct[i] != -1)
-        ++count;
-      else
-        break;
-    }
-
-    return count;
-  }
-  else { // type is UFS_REGULAR_FILE
-    return ceilDiv(theInode.size, UFS_BLOCK_SIZE);
-  }
-}
-
 /* #endregion Helper functions */
 
 /* #region Class functions */
