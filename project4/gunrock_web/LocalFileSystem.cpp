@@ -272,7 +272,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   /* #endregion */
 
   // Now create a new inode for the contents of this entry
-  int availableCreatedDataBit = -1;
+  int availableCreatedDataBlockNumber = -1;
   dir_ent_t theCreatedBlock[THE_ENTRIES_PER_BLOCK_CONSTANT];
   /* #region */
   theInodes[theAvailableInodeNumber].type = type;
@@ -284,12 +284,13 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     // The other one ".." pointing to parent
 
     // Get the first available data block, and set it in bitmap
-    availableCreatedDataBit = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    const int availableCreatedDataBit = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
 
     if (availableCreatedDataBit < 0 || availableCreatedDataBit >= super_block.num_data)
       return -ENOTENOUGHSPACE;
 
     setBit(theDataBitmap, availableCreatedDataBit);
+    availableCreatedDataBlockNumber = dataBitToBlockNum(super_block, availableCreatedDataBit);
     
     // Init the entries block appropriately
     theCreatedBlock[0].inum = theAvailableInodeNumber;
@@ -335,7 +336,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
     parentInode.direct[theIdxToAppendToParentInodeDirect] = theEntriesBlockNumber;
   }
   else {
-    const int theDirectSize = parentInode.size / sizeof(dir_ent_t);
+    const int theDirectSize = ceilDiv(parentInode.size, UFS_BLOCK_SIZE);
     const int theLastBlockIdx = theDirectSize - 1;
     theEntriesBlockNumber = parentInode.direct[theLastBlockIdx];
     
@@ -361,8 +362,8 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   this->writeInodeRegion(&super_block, theInodes);
 
   this->disk->writeBlock(theEntriesBlockNumber, theEntriesBlock);
-  if (availableCreatedDataBit != -1)
-    this->disk->writeBlock(availableCreatedDataBit, theCreatedBlock);
+  if (availableCreatedDataBlockNumber != -1)
+    this->disk->writeBlock(availableCreatedDataBlockNumber, theCreatedBlock);
   
   this->disk->commit();
   /* #endregion */
