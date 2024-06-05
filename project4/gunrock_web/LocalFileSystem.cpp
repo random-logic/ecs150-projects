@@ -425,21 +425,22 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
     int idx = theNumberOfBlocksPresent + i; // Append at the end
     
     // Get the first available data block number, and set that bit
-    int theAvailableBlockNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
-    if (theAvailableBlockNumber == -1)
+    int theAvailableBitNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    if (theAvailableBitNumber < 0 || theAvailableBitNumber >= super_block.num_data)
       return -ENOTENOUGHSPACE;
-    setBit(theDataBitmap, theAvailableBlockNumber);
+    setBit(theDataBitmap, theAvailableBitNumber);
 
     // Set the available block number in inode
-    theInodeToWrite.direct[idx] = theAvailableBlockNumber;
+    theInodeToWrite.direct[idx] = dataBitToBlockNum(super_block, theAvailableBitNumber);
   }
 
   for (int i = 1; i <= theNumberOfBlocksToDeallocate; ++i) {
-    int idx = theNumberOfBlocksPresent - i; // Start deallocating from the end
-    int theBlockNumberToFree = theInodeToWrite.direct[idx];
+    const int idx = theNumberOfBlocksPresent - i; // Start deallocating from the end
+    const int theBlockNumberToFree = theInodeToWrite.direct[idx];
+    const int theBitToFree = dataBlockNumToBit(super_block, theBlockNumberToFree);
 
     // Clear the bit to deallocate
-    clearBit(theDataBitmap, theBlockNumberToFree);
+    clearBit(theDataBitmap, theBitToFree);
   }
   /* #endregion */
 
