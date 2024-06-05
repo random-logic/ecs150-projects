@@ -163,6 +163,7 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
       // We have to create it
       const bool isLastInode = i == (int)thePathsVec.size() - 1;
       const bool type = isLastInode ? UFS_REGULAR_FILE : UFS_DIRECTORY;
+      cout << "Create" << endl;
       theNextInode = fileSystem->create(inodeNumToWrite, type, theNextEntryName);
       if (theNextInode == -ENOTENOUGHSPACE) {
         setNotEnoughSpace(response);
@@ -183,11 +184,14 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
     }
     
     inodeNumToWrite = theNextInode;
+    cout << inodeNumToWrite << endl;
   }
 
   // Now write to the inode
   const string contentToWrite = request->getBody();
+  cout << "here" << endl;
   const int bytesWritten = fileSystem->write(inodeNumToWrite, contentToWrite.data(), contentToWrite.size());
+  cout << "here2" << endl;
   /* #region */
   if (bytesWritten == -ENOTENOUGHSPACE || bytesWritten == -EINVALIDSIZE) {
     setNotEnoughSpace(response);
