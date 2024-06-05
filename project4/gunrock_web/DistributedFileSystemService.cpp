@@ -87,29 +87,26 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   /* #region */
   if (theInodeToRead.type == UFS_REGULAR_FILE) {
     // Just print the contents of the file
-    vector<char> buffer(MAX_FILE_SIZE + 1);
-    int bytesRead = fileSystem->read(theInodeNumberToRead, buffer.data(), MAX_FILE_SIZE);
-    if (bytesRead < 0) {
+    char buffer[theInodeToRead.size + 1];
+    if (fileSystem->read(theInodeNumberToRead, buffer, theInodeToRead.size) < 0) {
       setBadRequest(response);
       return;
     }
 
-    buffer.resize(bytesRead);
-    buffer.push_back('\0'); // Ensure null termination
+    buffer[theInodeToRead.size] = '\0'; // Ensure null termination
 
-    response->setBody(buffer.data());
+    response->setBody(buffer);
   }
   else {
     // Print all directory entries
-    vector<dir_ent_t> entries(MAX_FILE_SIZE / sizeof(dir_ent_t));
-    int bytesRead = fileSystem->read(theInodeNumberToRead, entries.data(), MAX_FILE_SIZE);
-    if (bytesRead < 0) {
+    const int numberOfEntries = theInodeToRead.size / sizeof(dir_ent_t);
+    dir_ent_t entries[theInodeToRead.size / sizeof(dir_ent_t)];
+    if (fileSystem->read(theInodeNumberToRead, entries, theInodeToRead.size) < 0) {
       setBadRequest(response);
       return;
     }
 
-    entries.resize(bytesRead / sizeof(dir_ent_t));
-    sort(entries.begin(), entries.end(), cmp);
+    sort(entries, entries + numberOfEntries, cmp);
     
     string theResult = "";
     for (dir_ent_t entry : entries) {
