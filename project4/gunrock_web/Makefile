@@ -1,4 +1,4 @@
-all: gunrock_web mkfs ds3ls ds3cat ds3bits unlink
+all: gunrock_web mkfs ds3ls ds3cat ds3bits unlink create
 
 CC = g++
 CFLAGS = -g -Werror -Wall -I include -I shared/include -I/usr/local/opt/openssl@1.1/include -I/opt/homebrew/Cellar/openssl@3/3.2.1/include
@@ -25,6 +25,9 @@ ds3cat: ds3cat.o $(DSUTIL_OBJS)
 
 ds3bits: ds3bits.o $(DSUTIL_OBJS)
 	$(CC) -o $@ $(CFLAGS) ds3bits.o $(DSUTIL_OBJS)
+
+create: create.o $(DSUTIL_OBJS)
+	$(CC) -o $@ $(CFLAGS) create.o $(DSUTIL_OBJS)
 
 unlink: unlink.o $(DSUTIL_OBJS)
 	$(CC) -o $@ $(CFLAGS) unlink.o $(DSUTIL_OBJS)
