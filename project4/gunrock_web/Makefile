@@ -46,4 +46,4 @@ unlink: unlink.o $(DSUTIL_OBJS)
 	gcc $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f gunrock_web mkfs ds3ls ds3cat ds3bits *.o *~ core.* *.d
+	rm -f gunrock_web mkfs ds3ls ds3cat ds3bits unlink *.o *~ core.* *.d
