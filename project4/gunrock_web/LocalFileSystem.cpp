@@ -227,7 +227,7 @@ int LocalFileSystem::create(int parentInodeNumber, int type, string name) {
   this->readDataBitmap(&super_block, theDataBitmap);
 
   // Get parent inode
-  inode_t parentInode = theInodes[parentInodeNumber];
+  inode_t & parentInode = theInodes[parentInodeNumber];
   /* #region */
   // Make sure it's a directory
   if (parentInode.type != UFS_DIRECTORY)
