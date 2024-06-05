@@ -45,12 +45,12 @@ void setBadRequest(HTTPResponse * response) {
 }
 
 bool parsePath(const string & theUrl, istringstream & thePaths) {
-  const string root = "ds3";
+  const string root = "ds3/";
   const int theStartingIndexOfRoot = theUrl.find(root);
   if (theStartingIndexOfRoot == static_cast<const int>(string::npos))
     return false;
   
-  string allPaths = theUrl.substr(theStartingIndexOfRoot + root.size() + 1); // +1 for the extra /
+  string allPaths = theUrl.substr(theStartingIndexOfRoot + root.size());
   thePaths = istringstream(allPaths);
   return true;
 }
@@ -62,7 +62,7 @@ DistributedFileSystemService::DistributedFileSystemService(string diskFile) : Ht
   fileSystem = new LocalFileSystem(new Disk(diskFile, UFS_BLOCK_SIZE));
 }  
 
-void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *response) {
+void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *response) {  
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
@@ -75,7 +75,7 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   // Go to the correct inode before reading
   int theInodeNumberToRead = THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT;
   string bufferNextEntryName;
-  while (getline(thePaths, bufferNextEntryName, '/')) {    
+  while (getline(thePaths, bufferNextEntryName, '/')) { 
     const int theNextInode = fileSystem->lookup(theInodeNumberToRead, bufferNextEntryName);
     if (theNextInode == -ENOTFOUND) {
       setNotFound(response);
@@ -163,7 +163,6 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
       // We have to create it
       const bool isLastInode = i == (int)thePathsVec.size() - 1;
       const bool type = isLastInode ? UFS_REGULAR_FILE : UFS_DIRECTORY;
-      cout << "Create" << endl;
       theNextInode = fileSystem->create(inodeNumToWrite, type, theNextEntryName);
       if (theNextInode == -ENOTENOUGHSPACE) {
         setNotEnoughSpace(response);
@@ -184,14 +183,11 @@ void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *respo
     }
     
     inodeNumToWrite = theNextInode;
-    cout << inodeNumToWrite << endl;
   }
 
   // Now write to the inode
   const string contentToWrite = request->getBody();
-  cout << "here" << endl;
   const int bytesWritten = fileSystem->write(inodeNumToWrite, contentToWrite.data(), contentToWrite.size());
-  cout << "here2" << endl;
   /* #region */
   if (bytesWritten == -ENOTENOUGHSPACE || bytesWritten == -EINVALIDSIZE) {
     setNotEnoughSpace(response);

@@ -84,7 +84,7 @@ inline int dataBlockNumToBit(const super_t & super, const int num) {
 }
 
 inline int dataBitToBlockNum(const super_t & super, const int bit) {
-  return bit + super.data_bitmap_addr;
+  return bit + super.data_region_addr;
 }
 /* #endregion Helper functions */
 
@@ -407,8 +407,8 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
   // After this, we will have exactly the number of blocks needed in our inode
   int theNumberOfBlocksPresent = ceilDiv(theInodeToWrite.size, UFS_BLOCK_SIZE);
   int theNumberOfBlocksNeeded = ceilDiv(size, UFS_BLOCK_SIZE);
-  int theNumberOfBlocksToAllocate = min(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
-  int theNumberOfBlocksToDeallocate = min(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
+  int theNumberOfBlocksToAllocate = max(0, theNumberOfBlocksNeeded - theNumberOfBlocksPresent);
+  int theNumberOfBlocksToDeallocate = max(0, theNumberOfBlocksPresent - theNumberOfBlocksNeeded);
   /* #region */
   if (theNumberOfBlocksNeeded > DIRECT_PTRS)
     return -ENOTENOUGHSPACE;
@@ -417,7 +417,7 @@ int LocalFileSystem::write(int inodeNumber, const void *buffer, int size) {
     int idx = theNumberOfBlocksPresent + i; // Append at the end
     
     // Get the first available data block number, and set that bit
-    int theAvailableBitNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
+    const int theAvailableBitNumber = getFirstAvailableBit(theDataBitmap, theLenOfDataBitmapArr);
     if (theAvailableBitNumber < 0 || theAvailableBitNumber >= super_block.num_data)
       return -ENOTENOUGHSPACE;
     setBit(theDataBitmap, theAvailableBitNumber);
