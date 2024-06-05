@@ -19,8 +19,19 @@ using namespace std;
 
 const int THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT = 0;
 
+/* #region Helpers */
 bool cmp(const dir_ent_t a, const dir_ent_t b) {
   return strcmp(a.name, b.name) < 0;
+}
+
+void setConflict(HTTPResponse * response) {
+  response->setStatus(ClientError::conflict().status_code);
+  response->setBody(ClientError::conflict().what());
+}
+
+void setNotEnoughSpace(HTTPResponse * response) {
+  response->setStatus(ClientError::insufficientStorage().status_code);
+  response->setBody(ClientError::insufficientStorage().what());
 }
 
 void setNotFound(HTTPResponse * response) {
@@ -45,6 +56,7 @@ bool parsePath(const string & theUrl, istringstream & thePaths) {
 }
 
 bool getOrCreateToInode(int & theParentInodeNumber, int & theInodeNumber, string & theEntryName, istringstream & thePaths, LocalFileSystem * theLocalFileSystem);
+/* #endregion Helpers */
 
 DistributedFileSystemService::DistributedFileSystemService(string diskFile) : HttpService("/ds3/") {
   fileSystem = new LocalFileSystem(new Disk(diskFile, UFS_BLOCK_SIZE));
@@ -54,13 +66,11 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
-  /* #region */
   if (!parsePath(theUrl, thePaths)) {
     // Nothing to read if the path did not parse
     response->setBody("");
     return;
   }
-  /* #endregion */
 
   // Go to the correct inode before reading
   int theInodeNumberToRead = THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT;
@@ -71,7 +81,7 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
       setNotFound(response);
       return;
     }
-    else if (theNextInode == -EINVALIDINODE) {
+    else if (theNextInode < 0) {
       setBadRequest(response);
       return;
     }
@@ -128,25 +138,66 @@ void DistributedFileSystemService::get(HTTPRequest *request, HTTPResponse *respo
   /* #endregion */
 }
 
-void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *response) {
-  response->setStatus(500);
-  return;
-  
+void DistributedFileSystemService::put(HTTPRequest *request, HTTPResponse *response) {  
   // Get the paths to look up in the file system in order
   const string theUrl = request->getUrl();
   istringstream thePaths;
-  /* #region */
   if (!parsePath(theUrl, thePaths)) {
     response->setBody("");
     return;
   }
-  /* #endregion */
   
-  // Get to the right path
-  
+  // Convert the paths into a vector
+  vector<string> thePathsVec;
+  string bufferNextEntryName;
+  while (getline(thePaths, bufferNextEntryName, '/')) {
+    thePathsVec.push_back(bufferNextEntryName);
+  }
 
-  // TODO ??
-  // How to get the contents of the file when put?
+  // Get to the right path
+  int inodeNumToWrite = THE_ROOT_INODE_NUMBER_OF_FS_CONSTANT;
+  for (int i = 0; i < (int)thePathsVec.size(); ++i) {
+    const string theNextEntryName = thePathsVec[i];
+    int theNextInode = fileSystem->lookup(inodeNumToWrite, theNextEntryName);
+    if (theNextInode == -ENOTFOUND) {
+      // We have to create it
+      const bool isLastInode = i == (int)thePathsVec.size() - 1;
+      const bool type = isLastInode ? UFS_REGULAR_FILE : UFS_DIRECTORY;
+      theNextInode = fileSystem->create(inodeNumToWrite, type, theNextEntryName);
+      if (theNextInode == -ENOTENOUGHSPACE) {
+        setNotEnoughSpace(response);
+        return;
+      }
+      else if (theNextInode == -EINVALIDTYPE) {
+        setConflict(response);
+        return;
+      }
+      else if (theNextInode < 0) {
+        setBadRequest(response);
+        return;
+      }
+    }
+    else if (theNextInode < 0) {
+      setBadRequest(response);
+      return;
+    }
+    
+    inodeNumToWrite = theNextInode;
+  }
+
+  // Now write to the inode
+  const string contentToWrite = request->getBody();
+  const int bytesWritten = fileSystem->write(inodeNumToWrite, contentToWrite.data(), contentToWrite.size());
+  /* #region */
+  if (bytesWritten == -ENOTENOUGHSPACE || bytesWritten == -EINVALIDSIZE) {
+    setNotEnoughSpace(response);
+    return;
+  }
+  else if (bytesWritten < 0) {
+    setBadRequest(response);
+    return;
+  }
+  /* #endregion */
 
   response->setBody("");
 }
